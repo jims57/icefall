@@ -32,11 +32,18 @@ repo=$(basename $repo_url)
 
 pushd $repo
 git lfs pull --include "data/lang_bpe_500/bpe.model"
-git lfs pull --include "exp/pretrained-iter-1224000-avg-14.pt"
+git lfs pull --include "exp/pretrained-iter-1224000-avg-14.pt"  # iter means iteration and 1224000 is the iteration number
 
 cd exp
 ln -s pretrained-iter-1224000-avg-14.pt epoch-9999.pt
-popd
+
+popd  
+# This command returns to the previous directory (egs/librispeech/ASR)
+# popd is the opposite of pushd, which saves the current directory and moves to a new one
+# Example of pushd/popd usage:
+# pushd /path/to/some/directory  # Saves current directory and changes to the specified one
+# do some work in the new directory
+# popd  # Returns to the original directory that was saved by pushd
 
 2. Export the model to ONNX
 

@@ -3,6 +3,12 @@
 # fix segmentation fault reported in https://github.com/k2-fsa/icefall/issues/674
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 
+# -e: Exit immediately if a command exits with a non-zero status
+# -o: Exit immediately if a pipeline exits with a non-zero status
+# -u: Treat unset variables as an error when substituting.
+#     For example, if you use $UNDEFINED_VARIABLE in your script and
+#     this variable is not defined, bash will raise an error instead of
+#     treating it as an empty string.
 set -eou pipefail
 
 nj=15
@@ -16,7 +22,7 @@ stop_stage=5
 # If you want to use ngram or nnlm, please continue running prepare_lm.sh after
 # you succeed running this script.
 #
-# This script also contains the steps to generate phone based units, but they
+# This script also contains the steps to generate phone based units (like 'AA', 'AE', 'AH', 'phonemes'), but they
 # will not run automatically, you can generate the phone based units by
 # bash prepare.sh --stage -1 --stop-stage -1
 # bash prepare.sh --stage 6 --stop-stage 6
@@ -31,6 +37,10 @@ stop_stage=5
 #      You can download them from https://www.openslr.org/12
 #
 #  - $dl_dir/musan
+#      This directory contains the MUSAN dataset (MUltiple Speakers And Noise)
+#      used for data augmentation in speech recognition. It includes background
+#      noise, music, and speech samples for training robust ASR models.
+#      Available at: http://www.openslr.org/17/
 #      This directory contains the following directories downloaded from
 #       http://www.openslr.org/17/
 #
@@ -40,7 +50,18 @@ stop_stage=5
 #
 # lm directory is not necessary for transducer training with bpe units, but it
 # is needed by phone based modeling, you can download it by running
-# bash prepare.sh --stage -1 --stop-stage -1
+# bash prepare.sh --stage -1 --stop-stage -1  # This runs only the LM download step
+# The script uses stage numbers to control which steps to run:
+# stage -1: Download LM data (not run by default)
+# stage 0-5: Default preparation steps for transducer training with BPE units
+# stage 6: Generate phone-based units (not run by default)
+#
+# To run only the LM download step:
+#   bash prepare.sh --stage -1 --stop-stage -1
+#
+# To run only the phone-based units generation:
+#   bash prepare.sh --stage 6 --stop-stage 6
+
 # then you can see the following files in the directory.
 #  - $dl_dir/lm
 #      This directory contains the following files downloaded from
@@ -56,6 +77,9 @@ stop_stage=5
 
 dl_dir=$PWD/download
 
+# Source the parse_options.sh script to parse command line arguments
+# This loads the script that handles command-line options parsing
+# If the script is not found or fails, exit with error code 1
 . shared/parse_options.sh || exit 1
 
 # vocab size for sentence piece models.
@@ -82,13 +106,22 @@ log "Running prepare.sh"
 
 log "dl_dir: $dl_dir"
 
+# This block downloads the language model (LM) if it hasn't been downloaded already
+# The code checks if the current stage is -1 and if we haven't passed stage -1 yet
 if [ $stage -le -1 ] && [ $stop_stage -ge -1 ]; then
+  # Log the current stage
   log "Stage -1: Download LM"
+  # Create the language model directory if it doesn't exist
   mkdir -p $dl_dir/lm
+  # Check if the .done file exists (which indicates the download was completed previously)
   if [ ! -e $dl_dir/lm/.done ]; then
+    # Run the download_lm.py script to download the language model
     ./local/download_lm.py --out-dir=$dl_dir/lm
+    # Create a .done file to mark that the download is complete
     touch $dl_dir/lm/.done
   fi
+# "fi" is the closing statement for the "if" condition in shell scripting
+# It marks the end of the conditional block
 fi
 
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
@@ -119,6 +152,8 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
   # to $dl_dir/LibriSpeech
   mkdir -p data/manifests
   if [ ! -e data/manifests/.librispeech.done ]; then
+    # -j is a lhotse built-in parameter for specifying the number of parallel jobs
+    # It's not a bash default parameter but specific to lhotse's CLI interface
     lhotse prepare librispeech -j $nj $dl_dir/LibriSpeech data/manifests
     touch data/manifests/.librispeech.done
   fi
@@ -139,15 +174,47 @@ if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
   log "Stage 3: Compute fbank for librispeech"
   mkdir -p data/fbank
   if [ ! -e data/fbank/.librispeech.done ]; then
+    # This script computes fbank features for the LibriSpeech dataset
+    # It processes all the LibriSpeech audio files and extracts
+    # filter bank features which will be used for model training
     ./local/compute_fbank_librispeech.py
     touch data/fbank/.librispeech.done
   fi
 
+  # This block creates a combined and shuffled dataset file if it doesn't already exist
   if [ ! -f data/fbank/librispeech_cuts_train-all-shuf.jsonl.gz ]; then
+    # Check if the combined training data file already exists to avoid redundant work
+    
+    # The following command combines all three LibriSpeech training subsets:
+    # 1. <(gunzip -c data/fbank/librispeech_cuts_train-clean-100.jsonl.gz)
+    #    - Process substitution to decompress the train-clean-100 cuts file
+    #    - Contains 100 hours of "clean" speech data
+    
+    # 2. <(gunzip -c data/fbank/librispeech_cuts_train-clean-360.jsonl.gz)
+    #    - Process substitution to decompress the train-clean-360 cuts file
+    #    - Contains 360 hours of "clean" speech data
+    
+    # 3. <(gunzip -c data/fbank/librispeech_cuts_train-other-500.jsonl.gz)
+    #    - Process substitution to decompress the train-other-500 cuts file
+    #    - Contains 500 hours of "other" (less clean) speech data
+    
+    # The 'cat' command concatenates all three decompressed files
+    # The '|' pipes this concatenated output to 'shuf' which randomly shuffles the lines
+    # Finally, the shuffled data is compressed with gzip and saved to the output file
+    # gunzip -c decompresses the gzipped file (.gz) and outputs to stdout
+    # -c flag means "write to standard output and keep original file"
+    # This command decompresses the jsonl.gz file without removing the original
+    # The <(...) syntax is process substitution that makes the output appear as a file
+    # For example, <(gunzip -c data/fbank/librispeech_cuts_train-clean-100.jsonl.gz)
+    # takes the decompressed content of the gzipped file and presents it as if it were
+    # a file that can be read by the 'cat' command, without creating temporary files
     cat <(gunzip -c data/fbank/librispeech_cuts_train-clean-100.jsonl.gz) \
       <(gunzip -c data/fbank/librispeech_cuts_train-clean-360.jsonl.gz) \
       <(gunzip -c data/fbank/librispeech_cuts_train-other-500.jsonl.gz) | \
       shuf | gzip -c > data/fbank/librispeech_cuts_train-all-shuf.jsonl.gz
+    
+    # The result is a single compressed file containing all ~960 hours of training data
+    # with examples randomly shuffled, which is important for effective model training
   fi
 
   if [ ! -e data/fbank/.librispeech-validated.done ]; then
@@ -218,6 +285,15 @@ if [ $stage -le 6 ] && [ $stop_stage -ge 6 ]; then
   fi
 
   if [ ! -f $lang_dir/lexicon.txt ]; then
+    # This creates a lexicon file by combining special tokens with the LibriSpeech lexicon
+    # First, we create three special pronunciation entries:
+    # 1. '!SIL SIL' - represents silence with pronunciation 'SIL'
+    # 2. '<SPOKEN_NOISE> SPN' - represents spoken noise with pronunciation 'SPN'
+    # 3. '<UNK> SPN' - represents unknown words, also with pronunciation 'SPN'
+    # Then we use 'cat -' to combine these entries with the LibriSpeech lexicon
+    # The '-' tells cat to read from standard input (our special entries) before reading the lexicon file
+    # Finally, we sort all entries and remove duplicates (uniq)
+    # The result is saved to $lang_dir/lexicon.txt
     (echo '!SIL SIL'; echo '<SPOKEN_NOISE> SPN'; echo '<UNK> SPN'; ) |
       cat - $dl_dir/lm/librispeech-lexicon.txt |
       sort | uniq > $lang_dir/lexicon.txt
