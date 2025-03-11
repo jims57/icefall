@@ -144,7 +144,8 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   else
     # For budget-constrained setups, download only train-clean-100
     if [ ! -d $dl_dir/LibriSpeech/train-clean-100 ]; then
-      lhotse download librispeech $dl_dir
+      # Explicitly download only the parts we need for partial dataset
+      lhotse download librispeech --parts="test-clean test-other dev-clean dev-other train-clean-100" $dl_dir
     fi
   fi
 
