@@ -27,7 +27,7 @@ import argparse
 import logging
 import os
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional
 
 import sentencepiece as spm
 import torch
@@ -62,14 +62,6 @@ def get_args():
     )
 
     parser.add_argument(
-        "--dataset-size",
-        type=str,
-        default="full",
-        choices=["full", "mini"],
-        help="""Whether to use full dataset or mini dataset (train-clean-100 only)""",
-    )
-
-    parser.add_argument(
         "--perturb-speed",
         type=str2bool,
         default=True,
@@ -82,7 +74,6 @@ def get_args():
 def compute_fbank_librispeech(
     bpe_model: Optional[str] = None,
     dataset: Optional[str] = None,
-    dataset_size: str = "full",
     perturb_speed: Optional[bool] = True,
 ):
     src_dir = Path("data/manifests")
@@ -95,17 +86,8 @@ def compute_fbank_librispeech(
         sp = spm.SentencePieceProcessor()
         sp.load(bpe_model)
 
-    # Determine which dataset parts to use based on dataset_size
-    if dataset_size == "mini":
-        available_parts = (
-            "dev-clean",
-            "dev-other",
-            "test-clean",
-            "test-other",
-            "train-clean-100",
-        )
-    else:
-        available_parts = (
+    if dataset is None:
+        dataset_parts = (
             "dev-clean",
             "dev-other",
             "test-clean",
@@ -114,14 +96,8 @@ def compute_fbank_librispeech(
             "train-clean-360",
             "train-other-500",
         )
-
-    # If specific dataset parts are requested, filter them
-    if dataset is not None:
-        dataset_parts = dataset.split(" ", -1)
-        # Only keep parts that are available in the selected dataset_size
-        dataset_parts = [part for part in dataset_parts if part in available_parts]
     else:
-        dataset_parts = available_parts
+        dataset_parts = dataset.split(" ", -1)
 
     prefix = "librispeech"
     suffix = "jsonl.gz"
@@ -131,13 +107,14 @@ def compute_fbank_librispeech(
         prefix=prefix,
         suffix=suffix,
     )
-    
-    # Skip if no manifests found
-    if not manifests:
-        logging.warning(f"No manifests found for {dataset_parts}")
-        return
+    assert manifests is not None
 
-    logging.info(f"Processing dataset parts: {list(manifests.keys())}")
+    assert len(manifests) == len(dataset_parts), (
+        len(manifests),
+        len(dataset_parts),
+        list(manifests.keys()),
+        dataset_parts,
+    )
 
     extractor = Fbank(FbankConfig(num_mel_bins=num_mel_bins))
 
@@ -183,6 +160,5 @@ if __name__ == "__main__":
     compute_fbank_librispeech(
         bpe_model=args.bpe_model,
         dataset=args.dataset,
-        dataset_size=args.dataset_size,
         perturb_speed=args.perturb_speed,
     )
