@@ -16,10 +16,6 @@ nj=15
 stage=0
 stop_stage=5
 
-# Default to using the full dataset
-# Set to "partial" to use only train-clean-100 for budget-constrained setups
-dataset_size="full"
-
 # Note: This script just prepare the minimal requirements that needed by a
 # transducer training with bpe units.
 #
@@ -109,7 +105,6 @@ log() {
 log "Running prepare.sh"
 
 log "dl_dir: $dl_dir"
-log "dataset_size: $dataset_size"
 
 # This block downloads the language model (LM) if it hasn't been downloaded already
 # The code checks if the current stage is -1 and if we haven't passed stage -1 yet
@@ -137,16 +132,8 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   #
   #   ln -sfv /path/to/LibriSpeech $dl_dir/LibriSpeech
   #
-  if [ "$dataset_size" = "full" ]; then
-    if [ ! -d $dl_dir/LibriSpeech/train-other-500 ]; then
-      lhotse download librispeech --full $dl_dir
-    fi
-  else
-    # For budget-constrained setups, download only train-clean-100
-    if [ ! -d $dl_dir/LibriSpeech/train-clean-100 ]; then
-      # Use --mini flag to download only train-clean-100 and test/dev sets
-      lhotse download librispeech --mini $dl_dir
-    fi
+  if [ ! -d $dl_dir/LibriSpeech/train-other-500 ]; then
+    lhotse download librispeech --full $dl_dir
   fi
 
   # If you have pre-downloaded it to /path/to/musan,
@@ -195,45 +182,52 @@ if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
   fi
 
   # This block creates a combined and shuffled dataset file if it doesn't already exist
-  if [ "$dataset_size" = "full" ]; then
-    if [ ! -f data/fbank/librispeech_cuts_train-all-shuf.jsonl.gz ]; then
-      # Combine all training subsets for full dataset training
-      cat <(gunzip -c data/fbank/librispeech_cuts_train-clean-100.jsonl.gz) \
-        <(gunzip -c data/fbank/librispeech_cuts_train-clean-360.jsonl.gz) \
-        <(gunzip -c data/fbank/librispeech_cuts_train-other-500.jsonl.gz) | \
-        shuf | gzip -c > data/fbank/librispeech_cuts_train-all-shuf.jsonl.gz
-    fi
-  else
-    # For budget-constrained setups, use only train-clean-100
-    if [ ! -f data/fbank/librispeech_cuts_train-all-shuf.jsonl.gz ]; then
-      log "Using only train-clean-100 for budget-constrained setup"
-      cat <(gunzip -c data/fbank/librispeech_cuts_train-clean-100.jsonl.gz) | \
-        shuf | gzip -c > data/fbank/librispeech_cuts_train-all-shuf.jsonl.gz
-    fi
+  if [ ! -f data/fbank/librispeech_cuts_train-all-shuf.jsonl.gz ]; then
+    # Check if the combined training data file already exists to avoid redundant work
+    
+    # The following command combines all three LibriSpeech training subsets:
+    # 1. <(gunzip -c data/fbank/librispeech_cuts_train-clean-100.jsonl.gz)
+    #    - Process substitution to decompress the train-clean-100 cuts file
+    #    - Contains 100 hours of "clean" speech data
+    
+    # 2. <(gunzip -c data/fbank/librispeech_cuts_train-clean-360.jsonl.gz)
+    #    - Process substitution to decompress the train-clean-360 cuts file
+    #    - Contains 360 hours of "clean" speech data
+    
+    # 3. <(gunzip -c data/fbank/librispeech_cuts_train-other-500.jsonl.gz)
+    #    - Process substitution to decompress the train-other-500 cuts file
+    #    - Contains 500 hours of "other" (less clean) speech data
+    
+    # The 'cat' command concatenates all three decompressed files
+    # The '|' pipes this concatenated output to 'shuf' which randomly shuffles the lines
+    # Finally, the shuffled data is compressed with gzip and saved to the output file
+    # gunzip -c decompresses the gzipped file (.gz) and outputs to stdout
+    # -c flag means "write to standard output and keep original file"
+    # This command decompresses the jsonl.gz file without removing the original
+    # The <(...) syntax is process substitution that makes the output appear as a file
+    # For example, <(gunzip -c data/fbank/librispeech_cuts_train-clean-100.jsonl.gz)
+    # takes the decompressed content of the gzipped file and presents it as if it were
+    # a file that can be read by the 'cat' command, without creating temporary files
+    cat <(gunzip -c data/fbank/librispeech_cuts_train-clean-100.jsonl.gz) \
+      <(gunzip -c data/fbank/librispeech_cuts_train-clean-360.jsonl.gz) \
+      <(gunzip -c data/fbank/librispeech_cuts_train-other-500.jsonl.gz) | \
+      shuf | gzip -c > data/fbank/librispeech_cuts_train-all-shuf.jsonl.gz
+    
+    # The result is a single compressed file containing all ~960 hours of training data
+    # with examples randomly shuffled, which is important for effective model training
   fi
 
   if [ ! -e data/fbank/.librispeech-validated.done ]; then
     log "Validating data/fbank for LibriSpeech"
     parts=(
+      train-clean-100
+      train-clean-360
+      train-other-500
       test-clean
       test-other
       dev-clean
       dev-other
     )
-    
-    # Add training parts based on dataset_size
-    if [ "$dataset_size" = "full" ]; then
-      parts+=(
-        train-clean-100
-        train-clean-360
-        train-other-500
-      )
-    else
-      parts+=(
-        train-clean-100
-      )
-    fi
-    
     for part in ${parts[@]}; do
       python3 ./local/validate_manifest.py \
         data/fbank/librispeech_cuts_${part}.jsonl.gz
@@ -266,34 +260,35 @@ if [ $stage -le 5 ] && [ $stop_stage -ge 5 ]; then
     if [ ! -f $lang_dir/transcript_words.txt ]; then
       log "Generate data for BPE training"
       # Find all transcript files (*.trans.txt) in the LibriSpeech training sets
-      if [ "$dataset_size" = "full" ]; then
-        files=$(
-          # Find all transcript files in all training subsets
-          find "$dl_dir/LibriSpeech/train-clean-100" -name "*.trans.txt"
-          find "$dl_dir/LibriSpeech/train-clean-360" -name "*.trans.txt"
-          find "$dl_dir/LibriSpeech/train-other-500" -name "*.trans.txt"
-        )
-      else
-        # For budget-constrained setups, use only train-clean-100
-        files=$(
-          find "$dl_dir/LibriSpeech/train-clean-100" -name "*.trans.txt"
-        )
-      fi
+      # These files contain the text transcriptions of the audio recordings
+      files=$(
+        # Find all transcript files in the clean-100 subset (100 hours)
+        find "$dl_dir/LibriSpeech/train-clean-100" -name "*.trans.txt"
+        # Find all transcript files in the clean-360 subset (360 hours)
+        find "$dl_dir/LibriSpeech/train-clean-360" -name "*.trans.txt"
+        # Find all transcript files in the other-500 subset (500 hours)
+        find "$dl_dir/LibriSpeech/train-other-500" -name "*.trans.txt"
+      )
       # Process each transcript file
       for f in ${files[@]}; do
         # The transcript files have format: <utterance_id> <text>
         # We use 'cat' to read the file and 'cut' to extract only the text part
+        # -d " " means split by space, -f 2- means take field 2 and all fields after it
         cat $f | cut -d " " -f 2-
       done > $lang_dir/transcript_words.txt
+      # All extracted text is saved to transcript_words.txt for BPE training
     fi
 
     # Check if we already have the BPE model to avoid retraining
     if [ ! -f $lang_dir/bpe.model ]; then
       # Train the BPE model using the collected transcripts
+      # This script will create subword units by finding common patterns in the text
       ./local/train_bpe_model.py \
         --lang-dir $lang_dir \
         --vocab-size $vocab_size \
         --transcript $lang_dir/transcript_words.txt
+      # The resulting model will have approximately vocab_size tokens
+      # This model will be used later to tokenize text for ASR training and inference
     fi
   done
 fi
