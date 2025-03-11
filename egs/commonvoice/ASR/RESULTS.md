@@ -23,6 +23,8 @@ the best CER is below:
 | modified_beam_search | 39.73 | 39.19| --epoch 24 --avg 5 |
 |   fast_beam_search   | 42.14 | 41.98| --epoch 24 --avg 5 |
 
+Note: These numbers represent Character Error Rate (CER) percentages. The higher CER values (around 40%) indicate significant degradation in performance when testing on the MDCC corpus compared to the in-domain CommonVoice test set (where CER was only ~1%). This demonstrates the challenge of cross-corpus generalization in ASR systems. The modified_beam_search method performs best among the decoding strategies, but the overall high error rates suggest domain mismatch between training and evaluation data.
+
 When doing the cross-corpus validation on [MDCC](https://arxiv.org/abs/2201.02419) (with blank penalty set to 2.2),
 the best CER is below:
 

@@ -24,15 +24,16 @@ The generated fbank features are saved in data/fbank.
 """
 
 import argparse
+import glob
 import logging
 import os
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 
 import sentencepiece as spm
 import torch
 from filter_cuts import filter_cuts
-from lhotse import CutSet, Fbank, FbankConfig, LilcomChunkyWriter
+from lhotse import CutSet, Fbank, FbankConfig, LilcomChunkyWriter, RecordingSet, SupervisionSet
 from lhotse.recipes.utils import read_manifests_if_cached
 
 from icefall.utils import get_executor, str2bool
@@ -97,15 +98,15 @@ def compute_fbank_librispeech(
 
     # Determine which dataset parts to use based on dataset_size
     if dataset_size == "mini":
-        available_parts = (
+        target_parts = [
             "dev-clean",
             "dev-other",
             "test-clean",
             "test-other",
             "train-clean-100",
-        )
+        ]
     else:
-        available_parts = (
+        target_parts = [
             "dev-clean",
             "dev-other",
             "test-clean",
@@ -113,47 +114,65 @@ def compute_fbank_librispeech(
             "train-clean-100",
             "train-clean-360",
             "train-other-500",
-        )
+        ]
 
     # If specific dataset parts are requested, filter them
     if dataset is not None:
         dataset_parts = dataset.split(" ", -1)
         # Only keep parts that are available in the selected dataset_size
-        dataset_parts = [part for part in dataset_parts if part in available_parts]
-    else:
-        dataset_parts = available_parts
+        target_parts = [part for part in target_parts if part in dataset_parts]
 
-    prefix = "librispeech"
-    suffix = "jsonl.gz"
-    manifests = read_manifests_if_cached(
-        dataset_parts=dataset_parts,
-        output_dir=src_dir,
-        prefix=prefix,
-        suffix=suffix,
-    )
+    logging.info(f"Looking for manifests in {src_dir}")
+    logging.info(f"Target parts for dataset_size={dataset_size}: {target_parts}")
     
-    # Skip if no manifests found
-    if not manifests:
-        logging.warning(f"No manifests found for {dataset_parts}")
-        return
-
-    logging.info(f"Processing dataset parts: {list(manifests.keys())}")
-
-    extractor = Fbank(FbankConfig(num_mel_bins=num_mel_bins))
-
+    # Find all available manifest files
+    recording_files = glob.glob(str(src_dir / "librispeech_recordings_*.jsonl.gz"))
+    supervision_files = glob.glob(str(src_dir / "librispeech_supervisions_*.jsonl.gz"))
+    
+    logging.info(f"Found recording files: {recording_files}")
+    logging.info(f"Found supervision files: {supervision_files}")
+    
+    # Extract the actual parts from filenames
+    available_parts = []
+    for f in recording_files:
+        part = os.path.basename(f).replace("librispeech_recordings_", "").replace(".jsonl.gz", "")
+        available_parts.append(part)
+    
+    logging.info(f"Available parts from manifest files: {available_parts}")
+    
+    # Map target parts to available parts
+    part_mapping = {}
+    for target in target_parts:
+        for available in available_parts:
+            if target in available:
+                part_mapping[target] = available
+                break
+    
+    logging.info(f"Part mapping: {part_mapping}")
+    
+    # Process each mapped part
     with get_executor() as ex:  # Initialize the executor only once.
-        for partition, m in manifests.items():
-            cuts_filename = f"{prefix}_cuts_{partition}.{suffix}"
+        for target_part, actual_part in part_mapping.items():
+            cuts_filename = f"librispeech_cuts_{target_part}.jsonl.gz"
             if (output_dir / cuts_filename).is_file():
-                logging.info(f"{partition} already exists - skipping.")
+                logging.info(f"{target_part} already exists - skipping.")
                 continue
-            logging.info(f"Processing {partition}")
+                
+            logging.info(f"Processing {target_part} (using manifest {actual_part})")
+            
+            # Load recordings and supervisions
+            recordings = RecordingSet.from_jsonl_gz(src_dir / f"librispeech_recordings_{actual_part}.jsonl.gz")
+            supervisions = SupervisionSet.from_jsonl_gz(src_dir / f"librispeech_supervisions_{actual_part}.jsonl.gz")
+            
+            # Create cut set
             cut_set = CutSet.from_manifests(
-                recordings=m["recordings"],
-                supervisions=m["supervisions"],
+                recordings=recordings,
+                supervisions=supervisions,
             )
+            
+            logging.info(f"Created cut set with {len(cut_set)} cuts")
 
-            if "train" in partition:
+            if "train" in target_part:
                 if bpe_model:
                     cut_set = filter_cuts(cut_set, sp)
                 if perturb_speed:
@@ -163,14 +182,18 @@ def compute_fbank_librispeech(
                         + cut_set.perturb_speed(0.9)
                         + cut_set.perturb_speed(1.1)
                     )
+            
+            logging.info(f"Computing features for {target_part}")
             cut_set = cut_set.compute_and_store_features(
-                extractor=extractor,
-                storage_path=f"{output_dir}/{prefix}_feats_{partition}",
+                extractor=Fbank(FbankConfig(num_mel_bins=num_mel_bins)),
+                storage_path=f"{output_dir}/librispeech_feats_{target_part}",
                 # when an executor is specified, make more partitions
                 num_jobs=num_jobs if ex is None else 80,
                 executor=ex,
                 storage_type=LilcomChunkyWriter,
             )
+            
+            logging.info(f"Saving cut set to {output_dir / cuts_filename}")
             cut_set.to_file(output_dir / cuts_filename)
 
 

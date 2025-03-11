@@ -181,13 +181,51 @@ if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
     # This script computes fbank features for the LibriSpeech dataset
     # It processes all the LibriSpeech audio files and extracts
     # filter bank features which will be used for model training
+    log "Running compute_fbank_librispeech.py with dataset_size=$dataset_size"
     ./local/compute_fbank_librispeech.py --dataset-size $dataset_size
+    
+    # Check if the script ran successfully
+    if [ $? -ne 0 ]; then
+      log "Error: compute_fbank_librispeech.py failed"
+      exit 1
+    fi
+    
+    # Check if any fbank files were generated
+    fbank_files=$(ls -la data/fbank/librispeech_cuts_*.jsonl.gz 2>/dev/null | wc -l)
+    log "Found $fbank_files fbank files in data/fbank/"
+    
+    # Wait for the fbank computation to complete before proceeding
+    # This ensures the files exist before validation
+    sleep 2
+    
     touch data/fbank/.librispeech.done
   fi
 
   # This block creates a combined and shuffled dataset file if it doesn't already exist
   if [ "$dataset_size" = "full" ]; then
     if [ ! -f data/fbank/librispeech_cuts_train-all-shuf.jsonl.gz ]; then
+      # Add a timeout counter
+      timeout_counter=0
+      max_timeout=30  # 5 minutes (30 * 10 seconds)
+      
+      # Wait until all the required files exist
+      while [ ! -f data/fbank/librispeech_cuts_train-clean-100.jsonl.gz ] || \
+            [ ! -f data/fbank/librispeech_cuts_train-clean-360.jsonl.gz ] || \
+            [ ! -f data/fbank/librispeech_cuts_train-other-500.jsonl.gz ]; do
+        log "Waiting for all training fbank files to be generated... ($timeout_counter/$max_timeout)"
+        
+        # List existing files for debugging
+        ls -la data/fbank/librispeech_cuts_*.jsonl.gz 2>/dev/null || echo "No fbank files found yet"
+        
+        sleep 10
+        timeout_counter=$((timeout_counter + 1))
+        
+        if [ $timeout_counter -ge $max_timeout ]; then
+          log "Timeout waiting for fbank files. Check if compute_fbank_librispeech.py is working correctly."
+          exit 1
+        fi
+      done
+      
       cat <(gunzip -c data/fbank/librispeech_cuts_train-clean-100.jsonl.gz) \
         <(gunzip -c data/fbank/librispeech_cuts_train-clean-360.jsonl.gz) \
         <(gunzip -c data/fbank/librispeech_cuts_train-other-500.jsonl.gz) | \
@@ -196,12 +234,40 @@ if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
   else
     # For budget-constrained setups, use only train-clean-100
     if [ ! -f data/fbank/librispeech_cuts_train-all-shuf.jsonl.gz ]; then
+      # Add a timeout counter
+      timeout_counter=0
+      max_timeout=30  # 5 minutes (30 * 10 seconds)
+      
+      # Wait until the required file exists
+      while [ ! -f data/fbank/librispeech_cuts_train-clean-100.jsonl.gz ]; do
+        log "Waiting for train-clean-100 fbank file to be generated... ($timeout_counter/$max_timeout)"
+        
+        # List existing files for debugging
+        ls -la data/fbank/librispeech_cuts_*.jsonl.gz 2>/dev/null || echo "No fbank files found yet"
+        
+        sleep 10
+        timeout_counter=$((timeout_counter + 1))
+        
+        if [ $timeout_counter -ge $max_timeout ]; then
+          log "Timeout waiting for fbank files. Check if compute_fbank_librispeech.py is working correctly."
+          
+          # Check if the script is still running
+          ps aux | grep compute_fbank_librispeech.py | grep -v grep
+          
+          # Check the logs
+          tail -n 50 compute_fbank_librispeech.log 2>/dev/null || echo "No log file found"
+          
+          exit 1
+        fi
+      done
+      
       log "Using only train-clean-100 for budget-constrained setup"
       cat <(gunzip -c data/fbank/librispeech_cuts_train-clean-100.jsonl.gz) | \
         shuf | gzip -c > data/fbank/librispeech_cuts_train-all-shuf.jsonl.gz
     fi
   fi
 
+  # Move validation to a separate step that runs only after fbank generation is complete
   if [ ! -e data/fbank/.librispeech-validated.done ]; then
     log "Validating data/fbank for LibriSpeech"
     parts=(
@@ -223,6 +289,14 @@ if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
         train-clean-100
       )
     fi
+    
+    # Wait for all files to exist before validating
+    for part in ${parts[@]}; do
+      while [ ! -f data/fbank/librispeech_cuts_${part}.jsonl.gz ]; do
+        log "Waiting for ${part} fbank file to be generated..."
+        sleep 10
+      done
+    done
     
     for part in ${parts[@]}; do
       python3 ./local/validate_manifest.py \
