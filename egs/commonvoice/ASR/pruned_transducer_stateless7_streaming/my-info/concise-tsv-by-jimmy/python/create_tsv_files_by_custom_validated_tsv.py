@@ -215,7 +215,9 @@ def main():
     # Collect the mp3 filenames from all rows - use a set for O(1) lookups
     selected_mp3s = set()
     for row in all_rows:
-        mp3_filename = row[1]  # The path column (index 1) contains the mp3 filename
+        mp3_path = row[1]  # The path column (index 1) contains the mp3 filename
+        # Extract just the filename from the path
+        mp3_filename = os.path.basename(mp3_path)
         selected_mp3s.add(mp3_filename)
     
     # Debug info
