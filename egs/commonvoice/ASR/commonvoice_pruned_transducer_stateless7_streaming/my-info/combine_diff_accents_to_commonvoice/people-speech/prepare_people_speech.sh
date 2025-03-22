@@ -81,3 +81,43 @@ echo "Converting parquet files to MP3 and transcripts..."
 python convert_parquets_files_into_mp3_and_transcripts.py
 
 echo "People Speech conversion completed."
+
+# Create 'en' directory if it doesn't exist
+if [ ! -d "en" ]; then
+  echo "Creating 'en' directory..."
+  mkdir -p en
+else
+  echo "Directory 'en' already exists."
+fi
+
+# Move clips folder and custom_validated.tsv to en directory
+echo "Moving clips folder and custom_validated.tsv to en directory..."
+if [ -d "clips" ]; then
+  mv clips en/
+  echo "Moved clips folder to en directory."
+else
+  echo "Warning: clips folder not found."
+fi
+
+if [ -f "custom_validated.tsv" ]; then
+  mv custom_validated.tsv en/
+  echo "Moved custom_validated.tsv to en directory."
+else
+  echo "Warning: custom_validated.tsv file not found."
+fi
+
+# Delete people_speech_data folder to save space
+if [ -d "people_speech_data" ]; then
+  echo "Deleting people_speech_data folder to save space..."
+  rm -rf people_speech_data
+  echo "people_speech_data folder deleted."
+else
+  echo "people_speech_data folder not found."
+fi
+
+# Clean up server space
+echo "Cleaning up server trash to free up space..."
+rm -rf ~/.local/share/Trash/*
+echo "Server trash cleaned."
+
+echo "People Speech preparation and organization completed."

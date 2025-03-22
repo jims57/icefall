@@ -195,8 +195,8 @@ for parquet_file in parquet_files:
     file_results = process_parquet_file(parquet_file, parquet_dir, clips_dir)
     processed_files.extend(file_results)
 
-# Append to validated.tsv
-tsv_file = "validated.tsv"
+# Append to custom_validated.tsv
+tsv_file = "custom_validated.tsv"
 write_header = not os.path.exists(tsv_file)
 
 with open(tsv_file, 'a', encoding='utf-8') as f:
