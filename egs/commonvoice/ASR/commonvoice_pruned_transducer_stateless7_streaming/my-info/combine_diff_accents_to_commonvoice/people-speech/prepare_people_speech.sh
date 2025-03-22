@@ -31,14 +31,24 @@
 # 2. Creates the people_speech_data directory if it doesn't exist
 # 3. Downloads People's Speech dataset parquet files
 
-# Default value for download-total
+# Default values for parameters
 download_total=10
+dev_ratio=0.1
+test_ratio=0.1
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
   case $1 in
     --download-total)
       download_total="$2"
+      shift 2
+      ;;
+    --dev-ratio)
+      dev_ratio="$2"
+      shift 2
+      ;;
+    --test-ratio)
+      test_ratio="$2"
       shift 2
       ;;
     *)
@@ -105,6 +115,97 @@ if [ -f "custom_validated.tsv" ]; then
 else
   echo "Warning: custom_validated.tsv file not found."
 fi
+
+# Generate TSV files for train, dev, and test sets
+echo "Generating train, dev, and test TSV files..."
+cd en
+python -c "
+import argparse
+import csv
+import os
+import random
+from pathlib import Path
+
+def write_tsv_file(filename, header, rows):
+    with open(filename, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f, delimiter='\t')
+        writer.writerow(header)
+        writer.writerows(rows)
+
+# Read all rows from custom_validated.tsv
+all_rows = []
+with open('custom_validated.tsv', 'r', encoding='utf-8') as f:
+    reader = csv.reader(f, delimiter='\t')
+    header = next(reader)  # Get the header
+    for row in reader:
+        all_rows.append(row)
+
+print(f'Total data rows in custom_validated.tsv: {len(all_rows)}')
+
+# Shuffle the rows to ensure randomness in the split
+random.seed(42)
+random.shuffle(all_rows)
+
+num_to_select = len(all_rows)
+dev_ratio = $dev_ratio
+test_ratio = $test_ratio
+
+# For small datasets: ensure exact allocation with minimums of 1 for dev/test
+if num_to_select >= 3:
+    # For small datasets, we need to be very precise
+    if num_to_select <= 10:
+        # With small datasets, ensure at least 1 each for dev/test, and rest to train
+        dev_size = 1
+        test_size = 1
+        train_size = num_to_select - dev_size - test_size
+    else:
+        # For larger datasets, calculate based on ratios
+        dev_size = max(1, round(num_to_select * dev_ratio))
+        test_size = max(1, round(num_to_select * test_ratio))
+        
+        # Ensure we don't over-allocate (leaving no train data)
+        if dev_size + test_size >= num_to_select:
+            dev_size = 1
+            test_size = 1
+            
+        # All remaining rows go to train
+        train_size = num_to_select - dev_size - test_size
+else:
+    # If we have fewer than 3 rows, prioritize train set
+    print('Warning: Not enough data for all three splits. Prioritizing train set.')
+    if num_to_select == 2:
+        dev_size = 1
+        test_size = 0
+        train_size = 1
+    elif num_to_select == 1:
+        dev_size = 0
+        test_size = 0
+        train_size = 1
+    else:  # num_to_select == 0
+        dev_size = 0
+        test_size = 0
+        train_size = 0
+
+print(f'Creating dev.tsv with {dev_size} data rows')
+print(f'Creating test.tsv with {test_size} data rows')
+print(f'Creating train.tsv with {train_size} data rows')
+
+# Split the rows
+dev_rows = all_rows[:dev_size]
+test_rows = all_rows[dev_size:dev_size + test_size]
+train_rows = all_rows[dev_size + test_size:]
+
+# Write the TSV files
+write_tsv_file('dev.tsv', header, dev_rows)
+write_tsv_file('test.tsv', header, test_rows)
+write_tsv_file('train.tsv', header, train_rows)
+
+print(f'Wrote {len(dev_rows)} data rows to dev.tsv')
+print(f'Wrote {len(test_rows)} data rows to test.tsv')
+print(f'Wrote {len(train_rows)} data rows to train.tsv')
+"
+cd ..
+echo "TSV files generation completed."
 
 # Delete people_speech_data folder to save space
 if [ -d "people_speech_data" ]; then
