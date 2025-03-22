@@ -1,4 +1,5 @@
 # Install required libraries
+# !pip install pandas pyarrow requests tqdm argparse
 
 import os
 import pandas as pd
@@ -6,8 +7,8 @@ import requests
 from tqdm import tqdm
 import argparse
 
-# Create directory to store the downloaded files
-!mkdir -p people_speech_data
+# # Create directory to store the downloaded files
+# !mkdir -p people_speech_data
 
 # Base URL for the People's Speech dataset on HuggingFace
 base_url = "https://huggingface.co/datasets/MLCommons/peoples_speech/resolve/main/clean/"
