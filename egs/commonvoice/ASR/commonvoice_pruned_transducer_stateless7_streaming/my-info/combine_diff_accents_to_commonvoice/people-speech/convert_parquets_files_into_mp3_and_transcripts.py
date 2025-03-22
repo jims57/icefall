@@ -39,8 +39,27 @@ for parquet_file in os.listdir(parquet_dir):
         print(f"Processing {parquet_file}...")
         
         try:
-            # Use pandas to read the parquet file directly instead of pyarrow
-            df = pd.read_parquet(parquet_path)
+            # Check file size first - empty or very small files might not be valid
+            file_size = os.path.getsize(parquet_path)
+            if file_size < 100:  # Arbitrary small size threshold
+                print(f"Skipping {parquet_file}: File appears to be empty or too small ({file_size} bytes)")
+                continue
+                
+            # Try to read with pandas
+            try:
+                df = pd.read_parquet(parquet_path)
+            except Exception as e:
+                print(f"Error with pandas read_parquet for {parquet_file}: {e}")
+                print(f"Attempting alternative reading method...")
+                
+                # Try with pyarrow directly as fallback
+                import pyarrow.parquet as pq
+                try:
+                    table = pq.read_table(parquet_path)
+                    df = table.to_pandas()
+                except Exception as e2:
+                    print(f"All reading methods failed for {parquet_file}: {e2}")
+                    continue
             
             # Process each row in the dataframe
             for idx, row in df.iterrows():
