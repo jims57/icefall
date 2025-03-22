@@ -209,4 +209,23 @@ with open(tsv_file, 'a', encoding='utf-8') as f:
 
 end_time = time.time()
 print(f"Added {len(processed_files)} entries to {tsv_file}")
-print(f"Total processing time: {end_time - start_time:.2f} seconds") 
+print(f"Total processing time: {end_time - start_time:.2f} seconds")
+
+# Calculate total size of MP3 files
+total_size_bytes = 0
+for mp3_file in os.listdir(clips_dir):
+    if mp3_file.endswith('.mp3'):
+        file_path = os.path.join(clips_dir, mp3_file)
+        total_size_bytes += os.path.getsize(file_path)
+
+# Convert bytes to GB
+total_size_gb = total_size_bytes / (1024 * 1024 * 1024)
+
+# Estimate total duration (32kHz mono MP3 files)
+# Approximate calculation: ~32 kbps for MP3 at this quality
+# So 32,000 bits per second = 4,000 bytes per second
+estimated_duration_seconds = total_size_bytes / 4000
+estimated_duration_hours = estimated_duration_seconds / 3600
+
+print(f"Total MP3 size: {total_size_gb:.2f} GB")
+print(f"Estimated audio duration: {estimated_duration_hours:.2f} hours") 

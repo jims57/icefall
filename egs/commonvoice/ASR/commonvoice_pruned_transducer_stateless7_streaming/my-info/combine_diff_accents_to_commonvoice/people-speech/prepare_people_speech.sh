@@ -14,23 +14,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""
-Usage:
 
+# Usage:
+#
 # Important: Both prepare_people_speech.sh and download_people_speech_parquets_files.py
 # must be uploaded to your working folder before running these commands.
-
+#
 # Download 10 files (default):
-bash prepare_people_speech.sh
-
+# bash prepare_people_speech.sh
+#
 # Download a specific number of files:
-bash prepare_people_speech.sh --download-total 20
-
-This script:
-1. Checks and installs required packages (pandas, pyarrow, requests, tqdm)
-2. Creates the people_speech_data directory if it doesn't exist
-3. Downloads People's Speech dataset parquet files
-"""
+# bash prepare_people_speech.sh --download-total 20
+#
+# This script:
+# 1. Checks and installs required packages (pandas, pyarrow, requests, tqdm)
+# 2. Creates the people_speech_data directory if it doesn't exist
+# 3. Downloads People's Speech dataset parquet files
 
 # Default value for download-total
 download_total=10
