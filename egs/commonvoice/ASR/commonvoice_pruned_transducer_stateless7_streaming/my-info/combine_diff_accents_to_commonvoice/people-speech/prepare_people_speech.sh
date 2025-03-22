@@ -71,3 +71,13 @@ echo "Running download script with download-total=$download_total..."
 python download_people_speech_parquets_files.py --download-total "$download_total"
 
 echo "People Speech preparation completed."
+
+# Install additional required packages for conversion
+echo "Installing additional required packages..."
+pip install pandas pyarrow pydub soundfile
+
+# Run the conversion script
+echo "Converting parquet files to MP3 and transcripts..."
+python convert_parquets_files_into_mp3_and_transcripts.py
+
+echo "People Speech conversion completed."
