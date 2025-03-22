@@ -32,6 +32,19 @@ try:
 
     # Print total number of audio samples
     print(f"\nTotal number of audio samples: {len(df)}")
+    
+    # Calculate total duration of all audio samples
+    if 'duration_ms' in df.columns:
+        total_duration_ms = df['duration_ms'].sum()
+        total_duration_hours = total_duration_ms / (1000 * 60 * 60)  # Convert ms to hours
+        print(f"\nTotal audio duration: {total_duration_ms:,} ms ({total_duration_hours:.2f} hours)")
+        
+        # Show duration statistics
+        print(f"Minimum audio duration: {df['duration_ms'].min():,} ms ({df['duration_ms'].min()/1000:.2f} seconds)")
+        print(f"Maximum audio duration: {df['duration_ms'].max():,} ms ({df['duration_ms'].max()/1000:.2f} seconds)")
+        print(f"Average audio duration: {df['duration_ms'].mean():,.2f} ms ({df['duration_ms'].mean()/1000:.2f} seconds)")
+    else:
+        print("Duration information not available in the dataset")
 
     # Print all text transcriptions
     print("\nAll text transcriptions in the dataset:")
