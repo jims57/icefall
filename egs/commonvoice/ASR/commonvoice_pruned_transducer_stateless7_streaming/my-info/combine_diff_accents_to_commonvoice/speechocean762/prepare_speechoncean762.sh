@@ -53,55 +53,73 @@ if [ ! -f "train/text" ] && [ ! -f "test/text" ]; then
     exit 1
 fi
 
-# Check if clips folder already exists and contains MP3 files
-if [ -d "clips" ] && [ "$(find clips -name "*.mp3" | wc -l)" -gt 0 ]; then
-    echo "Clips folder with MP3 files already exists. Skipping conversion from WAV to MP3..."
+# Check if clips folder already exists in the en directory and contains MP3 files
+if [ -d "en/clips" ] && [ "$(find en/clips -name "*.mp3" | wc -l)" -gt 0 ]; then
+    echo "en/clips folder with MP3 files already exists. Skipping conversion from WAV to MP3..."
     
-    # Check if custom_validated.tsv exists
-    if [ ! -f "custom_validated.tsv" ]; then
-        echo "Warning: clips folder exists but custom_validated.tsv not found. Running conversion script to generate TSV file only..."
+    # Check if custom_validated.tsv exists in en directory
+    if [ ! -f "en/custom_validated.tsv" ]; then
+        echo "Warning: en/clips folder exists but en/custom_validated.tsv not found. Running conversion script to generate TSV file only..."
         python convert_speechocean762_to_cv_ds_format.py --skip_audio_conversion
+        
+        # Move the generated TSV to en directory if it was created in the current directory
+        if [ -f "custom_validated.tsv" ]; then
+            mv custom_validated.tsv en/
+        fi
     else
-        echo "Both clips folder and custom_validated.tsv exist. Skipping conversion entirely."
+        echo "Both en/clips folder and en/custom_validated.tsv exist. Skipping conversion entirely."
     fi
 else
-    # Run the conversion script
-    echo "Converting SpeechOcean762 dataset to CommonVoice format..."
-    python convert_speechocean762_to_cv_ds_format.py
-fi
-
-# Create 'en' directory if it doesn't exist
-if [ ! -d "en" ]; then
-    echo "Creating 'en' directory..."
-    mkdir -p en
-else
-    echo "Directory 'en' already exists."
-fi
-
-# Move clips folder and custom_validated.tsv to en directory
-echo "Moving clips folder and custom_validated.tsv to en directory..."
-if [ -d "clips" ]; then
-    # Check if en/clips already exists
-    if [ -d "en/clips" ]; then
-        echo "Warning: en/clips already exists. Skipping move operation."
+    # Check if clips folder exists in current directory
+    if [ -d "clips" ] && [ "$(find clips -name "*.mp3" | wc -l)" -gt 0 ]; then
+        echo "clips folder with MP3 files exists in current directory. Skipping conversion from WAV to MP3..."
+        
+        # Check if custom_validated.tsv exists
+        if [ ! -f "custom_validated.tsv" ]; then
+            echo "Warning: clips folder exists but custom_validated.tsv not found. Running conversion script to generate TSV file only..."
+            python convert_speechocean762_to_cv_ds_format.py --skip_audio_conversion
+        else
+            echo "Both clips folder and custom_validated.tsv exist. Skipping conversion entirely."
+        fi
     else
-        mv clips en/
-        echo "Moved clips folder to en directory."
+        # Run the conversion script
+        echo "Converting SpeechOcean762 dataset to CommonVoice format..."
+        python convert_speechocean762_to_cv_ds_format.py
     fi
-else
-    echo "Warning: clips folder not found."
-fi
-
-if [ -f "custom_validated.tsv" ]; then
-    # Check if en/custom_validated.tsv already exists
-    if [ -f "en/custom_validated.tsv" ]; then
-        echo "Warning: en/custom_validated.tsv already exists. Skipping move operation."
+    
+    # Create 'en' directory if it doesn't exist
+    if [ ! -d "en" ]; then
+        echo "Creating 'en' directory..."
+        mkdir -p en
     else
-        mv custom_validated.tsv en/
-        echo "Moved custom_validated.tsv to en directory."
+        echo "Directory 'en' already exists."
     fi
-else
-    echo "Warning: custom_validated.tsv file not found."
+    
+    # Move clips folder and custom_validated.tsv to en directory
+    echo "Moving clips folder and custom_validated.tsv to en directory..."
+    if [ -d "clips" ]; then
+        # Check if en/clips already exists
+        if [ -d "en/clips" ]; then
+            echo "Warning: en/clips already exists. Skipping move operation."
+        else
+            mv clips en/
+            echo "Moved clips folder to en directory."
+        fi
+    else
+        echo "Warning: clips folder not found."
+    fi
+    
+    if [ -f "custom_validated.tsv" ]; then
+        # Check if en/custom_validated.tsv already exists
+        if [ -f "en/custom_validated.tsv" ]; then
+            echo "Warning: en/custom_validated.tsv already exists. Skipping move operation."
+        else
+            mv custom_validated.tsv en/
+            echo "Moved custom_validated.tsv to en directory."
+        fi
+    else
+        echo "Warning: custom_validated.tsv file not found."
+    fi
 fi
 
 # After moving files to en directory, clean up empty sentences
@@ -135,7 +153,7 @@ if [ -f "en/custom_validated.tsv" ] && [ -d "en/clips" ]; then
                 rm "en/clips/$mp3_file"
             fi
         else
-            # Keep rows with non-empty sentences
+            # Keep rows with non-empty sentences - write the entire row to the temp file
             echo -e "$client_id\t$path\t$sentence\t$up_votes\t$down_votes\t$age\t$gender\t$accent\t$locale\t$segment\t$other" >> "$temp_tsv"
         fi
     done
