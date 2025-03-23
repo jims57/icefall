@@ -87,7 +87,7 @@ echo "Installing additional required packages..."
 pip install pandas pyarrow pydub soundfile
 
 # Run the conversion script
-echo "Converting parquet files to MP3 and transcripts (filtering sentences with fewer than 10 words)..."
+echo "Converting parquet files to MP3 and transcripts (keeping only sentences with 8-25 words)..."
 python convert_parquets_files_into_mp3_and_transcripts.py
 
 echo "People Speech conversion completed."
@@ -121,7 +121,7 @@ echo "Dataset statistics after filtering:"
 if [ -f "en/custom_validated.tsv" ]; then
   total_lines=$(wc -l < "en/custom_validated.tsv")
   data_lines=$((total_lines - 1))  # Subtract header line
-  echo "Total utterances with 10+ words: $data_lines"
+  echo "Total utterances with 8-25 words: $data_lines"
 fi
 
 # Generate TSV files for train, dev, and test sets
