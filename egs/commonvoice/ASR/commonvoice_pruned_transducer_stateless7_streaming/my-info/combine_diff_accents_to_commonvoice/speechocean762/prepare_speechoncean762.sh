@@ -205,8 +205,8 @@ else
     fi
 fi
 
-# Clean up empty sentences in parallel
-echo "Cleaning up empty sentences from dataset..."
+# Clean up empty sentences and short sentences from dataset...
+echo "Cleaning up empty sentences and short sentences from dataset..."
 if [ -f "en/custom_validated.tsv" ] && [ -d "en/clips" ]; then
     # Create a temporary file to store the cleaned TSV
     temp_tsv=$(mktemp)
@@ -214,66 +214,73 @@ if [ -f "en/custom_validated.tsv" ] && [ -d "en/clips" ]; then
     # Copy the header line
     head -n 1 en/custom_validated.tsv > "$temp_tsv"
     
-    # Create a temporary processing script
-    process_script=$(mktemp)
-    chmod +x "$process_script"
-    
-    cat > "$process_script" << 'EOL'
-#!/bin/bash
-input_file="$1"
-line_num="$2"
-tsv_file="$3"
-
-# Read the specific line from TSV
-line=$(sed -n "${line_num}p" "$tsv_file")
-
-# Parse the line
-IFS=$'\t' read -r client_id path sentence up_votes down_votes age gender accent locale segment other <<< "$line"
-
-# Check if sentence field is empty
-if [ -z "$sentence" ] || [ "$sentence" = " " ]; then
-    # Extract the MP3 filename from the path
-    mp3_file=$(basename "$path")
-    
-    # Remove the corresponding MP3 file if it exists
-    if [ -f "en/clips/$mp3_file" ]; then
-        echo "Removing empty sentence MP3: $mp3_file" >&2
-        rm "en/clips/$mp3_file"
-    fi
-    # Return empty string (this row will be skipped)
-    echo ""
-else
-    # Keep row with non-empty sentence (output the entire line)
-    echo "$line"
-fi
-EOL
-    
-    # Count total rows for statistics
-    total_count=$(wc -l < en/custom_validated.tsv)
-    data_rows=$((total_count - 1))  # Subtract header
-    
-    # Process each data row
-    echo "Processing $data_rows rows..."
+    # Directly process each line for better debugging and control
+    total_lines=$(wc -l < en/custom_validated.tsv)
     empty_count=0
+    short_count=0
+    kept_count=0
     
-    for (( i=2; i<=$total_count; i++ )); do
-        result=$("$process_script" "$i" "$i" "en/custom_validated.tsv")
-        if [ -n "$result" ]; then
-            echo "$result" >> "$temp_tsv"
-        else
+    # First, display the first few lines of the TSV to understand its format
+    echo "Examining TSV format:"
+    head -n 5 en/custom_validated.tsv
+    
+    # Process line by line (starting from line 2 to skip header)
+    for ((i=2; i<=$total_lines; i++)); do
+        # Read the line
+        line=$(sed -n "${i}p" en/custom_validated.tsv)
+        
+        # Split line into columns - using proper TSV parsing
+        client_id=$(echo "$line" | cut -f1)
+        path=$(echo "$line" | cut -f2)
+        sentence=$(echo "$line" | cut -f4)  # Column 4 appears to be the sentence based on screenshot
+        
+        # Extract MP3 filename
+        mp3_file=$(basename "$path")
+        mp3_path="en/clips/$mp3_file"
+        
+        # Count words more accurately by replacing multiple spaces with single spaces first
+        cleaned_sentence=$(echo "$sentence" | tr -s ' ' | xargs)
+        word_count=$(echo "$cleaned_sentence" | wc -w)
+        
+        echo "Line $i: sentence=\"$sentence\", cleaned=\"$cleaned_sentence\", word count=$word_count"
+        
+        # Check if sentence is empty or has fewer than 3 words
+        if [ -z "$cleaned_sentence" ] || [ "$cleaned_sentence" = " " ]; then
+            if [ -f "$mp3_path" ]; then
+                echo "Removing empty sentence MP3: $mp3_file"
+                rm "$mp3_path"
+            fi
             empty_count=$((empty_count + 1))
+        elif [ $word_count -lt 3 ]; then
+            if [ -f "$mp3_path" ]; then
+                echo "Removing short sentence MP3 (fewer than 3 words): $mp3_file"
+                rm "$mp3_path"
+            fi
+            short_count=$((short_count + 1))
+        else
+            # Keep this row - it has 3+ words
+            echo "$line" >> "$temp_tsv"
+            kept_count=$((kept_count + 1))
         fi
     done
     
     # Replace original file with cleaned version
     mv "$temp_tsv" "en/custom_validated.tsv"
     
-    # Clean up
-    rm -f "$process_script"
+    echo "Cleaned dataset: removed $empty_count empty sentences and $short_count short sentences (fewer than 3 words)"
+    echo "Kept $kept_count sentences with 3+ words"
     
-    echo "Cleaned dataset: removed $empty_count empty sentences out of $data_rows total entries."
+    # Double-check the MP3 files match the kept entries
+    tsv_mp3_count=$(tail -n +2 en/custom_validated.tsv | wc -l)
+    actual_mp3_count=$(find en/clips -name "*.mp3" | wc -l)
+    echo "TSV entries (excluding header): $tsv_mp3_count"
+    echo "MP3 files in en/clips: $actual_mp3_count"
+    
+    if [ "$tsv_mp3_count" != "$actual_mp3_count" ]; then
+        echo "Warning: Mismatch between TSV entries and MP3 files"
+    fi
 else
-    echo "Warning: Cannot clean empty sentences - either TSV file or clips directory not found."
+    echo "Warning: Cannot clean sentences - either TSV file or clips directory not found."
 fi
 
 # Print statistics about the dataset
