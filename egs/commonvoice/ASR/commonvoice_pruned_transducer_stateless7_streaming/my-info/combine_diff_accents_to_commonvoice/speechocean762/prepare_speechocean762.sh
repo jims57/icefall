@@ -17,20 +17,43 @@
 
 # Usage:
 #
-# This script converts the SpeechOcean762 dataset to CommonVoice format.
-# It requires the SpeechOcean762 dataset already downloaded with the following structure:
-# - WAVE/ directory containing speaker subdirectories with WAV files
-# - train/text and test/text files with transcriptions
+# This script converts the SpeechOcean762 dataset to CommonVoice format,
+# cleans short sentences, and creates train/dev/test splits.
 #
 # Basic usage:
-# bash prepare_speechocean762.sh
+# bash prepare_speechocean762.sh --dev-ratio 0.1 --test-ratio 0.1
 #
-# The script:
-# 1. Installs required pydub package
-# 2. Runs the conversion script that:
-#    - Converts WAV files to MP3 format
-#    - Creates a CommonVoice-compatible TSV file
-#    - Organizes files in the proper directory structure
+# Parameters:
+#   --dev-ratio: Ratio of data to use for dev set (default: 0.1)
+#   --test-ratio: Ratio of data to use for test set (default: 0.1)
+#
+# Advanced example:
+# bash prepare_speechocean762.sh --dev-ratio 0.15 --test-ratio 0.15
+
+# Default values for parameters
+dev_ratio=0.1
+test_ratio=0.1
+
+# Parse command-line arguments
+while [[ $# -gt 0 ]]; do
+    key="$1"
+    case $key in
+        --dev-ratio)
+            dev_ratio="$2"
+            shift 2
+            ;;
+        --test-ratio)
+            test_ratio="$2"
+            shift 2
+            ;;
+        *)
+            # Unknown option
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--dev-ratio RATIO] [--test-ratio RATIO]"
+            exit 1
+            ;;
+    esac
+done
 
 # Check if conda is available
 if ! command -v conda &> /dev/null; then
@@ -283,7 +306,114 @@ else
     echo "Warning: Cannot clean sentences - either TSV file or clips directory not found."
 fi
 
-# Print statistics about the dataset
+# Create train, dev, and test splits
+echo "Creating train, dev, and test splits with dev ratio $dev_ratio and test ratio $test_ratio..."
+if [ -f "en/custom_validated.tsv" ]; then
+    # Create a Python script for splitting
+    cat > split_tsv_into_sets.py << 'EOL'
+#!/usr/bin/env python3
+import argparse
+import csv
+import random
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Split TSV file into train, dev, and test sets")
+    parser.add_argument("--input-tsv", type=str, required=True, help="Input TSV file")
+    parser.add_argument("--dev-ratio", type=float, default=0.1, help="Ratio for dev set")
+    parser.add_argument("--test-ratio", type=float, default=0.1, help="Ratio for test set")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    return parser.parse_args()
+
+def main():
+    args = parse_args()
+    
+    # Validate ratios
+    if args.dev_ratio + args.test_ratio >= 1.0:
+        raise ValueError("Sum of dev_ratio and test_ratio must be less than 1.0")
+    
+    # Read the TSV file
+    with open(args.input_tsv, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        header = next(reader)  # Read header
+        rows = list(reader)    # Read all data rows
+    
+    # Shuffle the rows
+    random.seed(args.seed)
+    random.shuffle(rows)
+    
+    # Calculate split sizes
+    total_rows = len(rows)
+    dev_size = max(1, int(total_rows * args.dev_ratio))
+    test_size = max(1, int(total_rows * args.test_ratio))
+    
+    # Ensure we have enough data for all splits
+    if total_rows < 3:
+        print("Warning: Not enough data for proper splits")
+        if total_rows == 2:
+            dev_size, test_size = 1, 0
+        elif total_rows == 1:
+            dev_size, test_size = 0, 0
+        else:  # total_rows == 0
+            dev_size, test_size = 0, 0
+    elif dev_size + test_size >= total_rows:
+        # Ensure at least one row for train
+        dev_size = 1
+        test_size = 1 if total_rows > 2 else 0
+    
+    train_size = total_rows - dev_size - test_size
+    
+    print(f"Total rows: {total_rows}")
+    print(f"Train set: {train_size} rows")
+    print(f"Dev set: {dev_size} rows")
+    print(f"Test set: {test_size} rows")
+    
+    # Split the data
+    dev_rows = rows[:dev_size]
+    test_rows = rows[dev_size:dev_size + test_size]
+    train_rows = rows[dev_size + test_size:]
+    
+    # Write the output files
+    with open('en/train.tsv', 'w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f, delimiter='\t')
+        writer.writerow(header)
+        writer.writerows(train_rows)
+    
+    with open('en/dev.tsv', 'w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f, delimiter='\t')
+        writer.writerow(header)
+        writer.writerows(dev_rows)
+    
+    with open('en/test.tsv', 'w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f, delimiter='\t')
+        writer.writerow(header)
+        writer.writerows(test_rows)
+
+if __name__ == "__main__":
+    main()
+EOL
+
+    # Make the script executable
+    chmod +x split_tsv_into_sets.py
+    
+    # Run the script
+    python split_tsv_into_sets.py --input-tsv="en/custom_validated.tsv" --dev-ratio="$dev_ratio" --test-ratio="$test_ratio"
+    
+    # Verify the results
+    train_count=$(tail -n +2 en/train.tsv | wc -l)
+    dev_count=$(tail -n +2 en/dev.tsv | wc -l)
+    test_count=$(tail -n +2 en/test.tsv | wc -l)
+    total_count=$((train_count + dev_count + test_count))
+    
+    echo "Dataset splits created:"
+    echo "  - Train set: $train_count utterances"
+    echo "  - Dev set: $dev_count utterances"
+    echo "  - Test set: $test_count utterances"
+    echo "  - Total: $total_count utterances"
+else
+    echo "Warning: Cannot create dataset splits - custom_validated.tsv not found."
+fi
+
+# Print statistics about the final dataset
 echo "Dataset statistics:"
 if [ -f "en/custom_validated.tsv" ]; then
     total_lines=$(wc -l < "en/custom_validated.tsv")
@@ -292,3 +422,7 @@ if [ -f "en/custom_validated.tsv" ]; then
 fi
 
 echo "SpeechOcean762 preparation completed." 
+echo
+echo "Example usage of the prepared dataset:"
+echo "  - Use all data: bash prepare_speechocean762.sh"
+echo "  - Custom split ratios: bash prepare_speechocean762.sh --dev-ratio 0.15 --test-ratio 0.15" 
