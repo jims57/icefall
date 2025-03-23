@@ -222,9 +222,10 @@ else
         echo "Generating TSV file..."
         if [ -n "$merge_into_dir" ]; then
             # Generate TSV with audio path update to point to merge directory
-            python convert_speechocean762_to_cv_ds_format.py --skip_audio_conversion --output_tsv="temp_generated.tsv" --output_dir="$merge_into_dir/en/clips"
+            echo "Rebuilding TSV file from MP3 files in $merge_into_dir/en/clips..."
+            python convert_speechocean762_to_cv_ds_format.py --skip_audio_conversion --output_tsv="$merge_into_dir/en/custom_validated.tsv" --output_dir="$merge_into_dir/en/clips" --rebuild_tsv
         else
-            python convert_speechocean762_to_cv_ds_format.py --skip_audio_conversion
+            python convert_speechocean762_to_cv_ds_format.py --skip_audio_conversion --sync_files
         fi
     fi
     
@@ -487,6 +488,14 @@ if [ -z "$merge_into_dir" ]; then
         
         if [ "$tsv_mp3_count" != "$actual_mp3_count" ]; then
             echo "Warning: Mismatch between TSV entries and MP3 files"
+            echo "Running sync operation to ensure consistency..."
+            python convert_speechocean762_to_cv_ds_format.py --skip_audio_conversion --output_dir="en/clips" --output_tsv="en/custom_validated.tsv.new" --sync_files
+            mv "en/custom_validated.tsv.new" "en/custom_validated.tsv"
+            
+            # Verify again
+            tsv_mp3_count=$(tail -n +2 en/custom_validated.tsv | wc -l)
+            actual_mp3_count=$(find en/clips -name "*.mp3" | wc -l)
+            echo "After sync - TSV entries: $tsv_mp3_count, MP3 files: $actual_mp3_count"
         fi
     else
         echo "Warning: Cannot clean sentences - either TSV file or clips directory not found."
