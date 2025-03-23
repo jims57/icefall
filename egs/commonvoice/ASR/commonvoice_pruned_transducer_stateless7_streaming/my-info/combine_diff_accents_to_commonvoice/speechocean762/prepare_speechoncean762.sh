@@ -104,6 +104,50 @@ else
     echo "Warning: custom_validated.tsv file not found."
 fi
 
+# After moving files to en directory, clean up empty sentences
+echo "Cleaning up empty sentences from dataset..."
+if [ -f "en/custom_validated.tsv" ] && [ -d "en/clips" ]; then
+    # Create a temporary file to store the cleaned TSV
+    temp_tsv=$(mktemp)
+    
+    # Copy the header line
+    head -n 1 en/custom_validated.tsv > "$temp_tsv"
+    
+    # Process the TSV file to find and remove empty sentences
+    empty_count=0
+    total_count=0
+    
+    # Skip the header line and process each data row
+    tail -n +2 en/custom_validated.tsv | while IFS=$'\t' read -r client_id path sentence up_votes down_votes age gender accent locale segment other
+    do
+        total_count=$((total_count + 1))
+        
+        # Check if sentence field is empty
+        if [ -z "$sentence" ] || [ "$sentence" = " " ]; then
+            empty_count=$((empty_count + 1))
+            
+            # Extract the MP3 filename from the path
+            mp3_file=$(basename "$path")
+            
+            # Remove the corresponding MP3 file if it exists
+            if [ -f "en/clips/$mp3_file" ]; then
+                echo "Removing empty sentence MP3: $mp3_file"
+                rm "en/clips/$mp3_file"
+            fi
+        else
+            # Keep rows with non-empty sentences
+            echo -e "$client_id\t$path\t$sentence\t$up_votes\t$down_votes\t$age\t$gender\t$accent\t$locale\t$segment\t$other" >> "$temp_tsv"
+        fi
+    done
+    
+    # Replace the original TSV with the cleaned one
+    mv "$temp_tsv" "en/custom_validated.tsv"
+    
+    echo "Cleaned dataset: removed $empty_count empty sentences out of $total_count total entries."
+else
+    echo "Warning: Cannot clean empty sentences - either TSV file or clips directory not found."
+fi
+
 # Print statistics about the dataset
 echo "Dataset statistics:"
 if [ -f "en/custom_validated.tsv" ]; then
