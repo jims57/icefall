@@ -26,6 +26,7 @@
 # Parameters:
 #   --dev-ratio: Ratio of data to use for dev set (default: 0.1)
 #   --test-ratio: Ratio of data to use for test set (default: 0.1)
+#   --merge-into-dir: Directory to merge data into (default: empty)
 #
 # Advanced example:
 # bash prepare_speechocean762.sh --dev-ratio 0.15 --test-ratio 0.15
@@ -33,6 +34,7 @@
 # Default values for parameters
 dev_ratio=0.1
 test_ratio=0.1
+merge_into_dir=""
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -46,10 +48,14 @@ while [[ $# -gt 0 ]]; do
             test_ratio="$2"
             shift 2
             ;;
+        --merge-into-dir)
+            merge_into_dir="$2"
+            shift 2
+            ;;
         *)
             # Unknown option
             echo "Unknown option: $1"
-            echo "Usage: $0 [--dev-ratio RATIO] [--test-ratio RATIO]"
+            echo "Usage: $0 [--dev-ratio RATIO] [--test-ratio RATIO] [--merge-into-dir DIR]"
             exit 1
             ;;
     esac
@@ -143,19 +149,29 @@ else
     else
         echo "Converting WAV files to MP3 using FFmpeg with parallel processing..."
         
-        # Create clips directory if it doesn't exist
-        mkdir -p clips
+        # Determine output directory based on merge_into_dir parameter
+        if [ -n "$merge_into_dir" ]; then
+            # Ensure target directory exists
+            mkdir -p "$merge_into_dir/en/clips"
+            output_clips_dir="$merge_into_dir/en/clips"
+            echo "Will output MP3 files directly to $output_clips_dir"
+        else
+            # Create local clips directory if it doesn't exist
+            mkdir -p clips
+            output_clips_dir="clips"
+        fi
         
         # Create a file list of all WAV files
-        find WAVE -name "*.wav" > wav_files.txt
+        find WAVE -name "*.wav" -o -name "*.WAV" > wav_files.txt
         
         # Define conversion functions based on GPU availability
         if $has_gpu; then
             # NVIDIA GPU conversion function
             convert_to_mp3() {
                 local wav_file="$1"
+                local output_dir="$2"
                 local filename=$(basename "$wav_file" .wav)
-                local mp3_file="clips/${filename}.mp3"
+                local mp3_file="${output_dir}/${filename}.mp3"
                 
                 # Try GPU acceleration first
                 ffmpeg -y -hwaccel cuda -i "$wav_file" -codec:a libmp3lame -qscale:a 2 "$mp3_file" -loglevel error
@@ -170,147 +186,317 @@ else
             # CPU-only conversion function
             convert_to_mp3() {
                 local wav_file="$1"
-                local filename=$(basename "$wav_file" .wav)
-                local mp3_file="clips/${filename}.mp3"
+                local output_dir="$2"
+                # Handle both uppercase and lowercase extensions
+                if [[ "$wav_file" == *.WAV ]]; then
+                    local filename=$(basename "$wav_file" .WAV)
+                else
+                    local filename=$(basename "$wav_file" .wav)
+                fi
+                local mp3_file="${output_dir}/${filename}.mp3"
                 
                 # Convert using CPU with thread optimization
                 ffmpeg -y -i "$wav_file" -codec:a libmp3lame -qscale:a 2 -threads 1 "$mp3_file" -loglevel error
+                
+                # Print success message
+                if [ $? -eq 0 ]; then
+                    echo "Successfully converted: $wav_file -> $mp3_file"
+                else
+                    echo "Error converting: $wav_file"
+                fi
             }
         fi
         
         # Export the function so parallel can use it
         export -f convert_to_mp3
+        export output_clips_dir
         
         # Process files in parallel with progress indicator
         echo "Starting parallel conversion with $effective_cores processes..."
-        cat wav_files.txt | parallel --progress --bar -j $effective_cores convert_to_mp3
+        cat wav_files.txt | parallel --progress --bar -j $effective_cores "convert_to_mp3 {} $output_clips_dir"
         
         # Clean up
         rm wav_files.txt
         
         # Generate the TSV file
         echo "Generating TSV file..."
-        python convert_speechocean762_to_cv_ds_format.py --skip_audio_conversion
-    fi
-    
-    # Create 'en' directory if it doesn't exist
-    if [ ! -d "en" ]; then
-        echo "Creating 'en' directory..."
-        mkdir -p en
-    else
-        echo "Directory 'en' already exists."
-    fi
-    
-    # Move clips folder and custom_validated.tsv to en directory
-    echo "Moving clips folder and custom_validated.tsv to en directory..."
-    if [ -d "clips" ]; then
-        # Check if en/clips already exists
-        if [ -d "en/clips" ]; then
-            echo "Warning: en/clips already exists. Skipping move operation."
+        if [ -n "$merge_into_dir" ]; then
+            # Generate TSV with audio path update to point to merge directory
+            python convert_speechocean762_to_cv_ds_format.py --skip_audio_conversion --output_tsv="temp_generated.tsv" --output_dir="$merge_into_dir/en/clips"
         else
-            mv clips en/
-            echo "Moved clips folder to en directory."
+            python convert_speechocean762_to_cv_ds_format.py --skip_audio_conversion
         fi
-    else
-        echo "Warning: clips folder not found."
     fi
     
-    if [ -f "custom_validated.tsv" ]; then
-        # Check if en/custom_validated.tsv already exists
-        if [ -f "en/custom_validated.tsv" ]; then
-            echo "Warning: en/custom_validated.tsv already exists. Skipping move operation."
+    # Handle the TSV and directory operations based on merge_into_dir parameter
+    if [ -n "$merge_into_dir" ]; then
+        # We're merging into an existing directory
+        echo "Merging data into $merge_into_dir..."
+        
+        # Create target directories if they don't exist
+        mkdir -p "$merge_into_dir/en"
+        
+        # Check if target TSV exists
+        if [ -f "$merge_into_dir/en/custom_validated.tsv" ]; then
+            echo "Target custom_validated.tsv exists, merging data..."
+            
+            # Create a Python script to merge TSV files without duplicates
+            cat > merge_tsv_files.py << 'EOL'
+#!/usr/bin/env python3
+import argparse
+import csv
+import os
+
+def main():
+    parser = argparse.ArgumentParser(description="Merge TSV files without duplicates")
+    parser.add_argument("--source", type=str, required=True, help="Source TSV file")
+    parser.add_argument("--target", type=str, required=True, help="Target TSV file to merge into")
+    parser.add_argument("--output", type=str, required=True, help="Output TSV file")
+    args = parser.parse_args()
+    
+    # Read target file data to detect duplicates
+    target_paths = set()
+    target_sentences = set()
+    target_rows = []
+    
+    with open(args.target, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        header = next(reader)  # Read header
+        for row in reader:
+            path = row[1] if len(row) > 1 else ""
+            sentence = row[3] if len(row) > 3 else ""
+            
+            # Store paths and sentences for duplicate detection
+            if path:
+                target_paths.add(os.path.basename(path))
+            if sentence:
+                target_sentences.add(sentence.strip())
+            
+            target_rows.append(row)
+    
+    # Read source file and find new entries
+    new_rows = []
+    duplicates = 0
+    
+    with open(args.source, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        source_header = next(reader)  # Skip header
+        
+        for row in reader:
+            path = row[1] if len(row) > 1 else ""
+            sentence = row[3] if len(row) > 3 else ""
+            
+            # Check for duplicates
+            filename = os.path.basename(path) if path else ""
+            is_duplicate = False
+            
+            if filename and filename in target_paths:
+                is_duplicate = True
+            elif sentence and sentence.strip() in target_sentences:
+                is_duplicate = True
+            
+            if is_duplicate:
+                duplicates += 1
+            else:
+                new_rows.append(row)
+                # Add to sets to prevent duplicates within source file
+                if path:
+                    target_paths.add(os.path.basename(path))
+                if sentence:
+                    target_sentences.add(sentence.strip())
+    
+    # Write merged data to output file
+    with open(args.output, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f, delimiter='\t')
+        writer.writerow(header)
+        writer.writerows(target_rows)
+        writer.writerows(new_rows)
+    
+    print(f"Merged files: {len(new_rows)} new entries added, {duplicates} duplicates skipped")
+
+if __name__ == "__main__":
+    main()
+EOL
+            
+            # Make script executable
+            chmod +x merge_tsv_files.py
+            
+            # Merge TSV files
+            if [ -f "temp_generated.tsv" ]; then
+                source_tsv="temp_generated.tsv"
+            elif [ -f "custom_validated.tsv" ]; then
+                source_tsv="custom_validated.tsv"
+            elif [ -f "en/custom_validated.tsv" ]; then
+                source_tsv="en/custom_validated.tsv"
+            else
+                echo "Error: Could not find source TSV file to merge"
+                exit 1
+            fi
+            
+            python merge_tsv_files.py --source="$source_tsv" --target="$merge_into_dir/en/custom_validated.tsv" --output="$merge_into_dir/en/custom_validated.tsv.new"
+            mv "$merge_into_dir/en/custom_validated.tsv.new" "$merge_into_dir/en/custom_validated.tsv"
+            
+            # Clean up temporary files
+            if [ -f "temp_generated.tsv" ]; then
+                rm temp_generated.tsv
+            fi
+            
+            echo "Data successfully merged into $merge_into_dir"
+            echo "Local processing complete. When using merge mode, local 'en' directory is not created to save space."
+            
+            # Skip creating local en directory when merging
+            if [ -n "$merge_into_dir" ]; then
+                # Set a flag to skip remaining local processing
+                skip_local_processing=true
+            fi
         else
-            mv custom_validated.tsv en/
-            echo "Moved custom_validated.tsv to en directory."
+            # Target TSV doesn't exist, create it from scratch
+            echo "Target custom_validated.tsv doesn't exist, creating it..."
+            
+            if [ -f "temp_generated.tsv" ]; then
+                # Copy the generated TSV to the target location
+                cp temp_generated.tsv "$merge_into_dir/en/custom_validated.tsv"
+                rm temp_generated.tsv
+            elif [ -f "custom_validated.tsv" ]; then
+                cp custom_validated.tsv "$merge_into_dir/en/custom_validated.tsv"
+            elif [ -f "en/custom_validated.tsv" ]; then
+                cp en/custom_validated.tsv "$merge_into_dir/en/custom_validated.tsv"
+            else
+                echo "Error: Could not find TSV file to copy to target location"
+                exit 1
+            fi
+            
+            echo "Data successfully initialized in $merge_into_dir"
+            echo "Local processing complete. When using merge mode, local 'en' directory is not created to save space."
+            
+            # Skip creating local en directory when merging
+            skip_local_processing=true
         fi
-    else
-        echo "Warning: custom_validated.tsv file not found."
+    fi
+    
+    # Only create and process local en directory if we're not in merge mode
+    if [ -z "$merge_into_dir" ] || [ "$skip_local_processing" != "true" ]; then
+        # Create 'en' directory if it doesn't exist
+        if [ ! -d "en" ]; then
+            echo "Creating 'en' directory..."
+            mkdir -p en
+        else
+            echo "Directory 'en' already exists."
+        fi
+        
+        # Move clips folder and custom_validated.tsv to en directory
+        echo "Moving clips folder and custom_validated.tsv to en directory..."
+        if [ -d "clips" ]; then
+            # Check if en/clips already exists
+            if [ -d "en/clips" ]; then
+                echo "Warning: en/clips already exists. Skipping move operation."
+            else
+                mv clips en/
+                echo "Moved clips folder to en directory."
+            fi
+        else
+            echo "Warning: clips folder not found."
+        fi
+        
+        if [ -f "custom_validated.tsv" ]; then
+            # Check if en/custom_validated.tsv already exists
+            if [ -f "en/custom_validated.tsv" ]; then
+                echo "Warning: en/custom_validated.tsv already exists. Skipping move operation."
+            else
+                mv custom_validated.tsv en/
+                echo "Moved custom_validated.tsv to en directory."
+            fi
+        else
+            echo "Warning: custom_validated.tsv file not found."
+        fi
     fi
 fi
 
-# Clean up empty sentences and short sentences from dataset...
-echo "Cleaning up empty sentences and short sentences from dataset..."
-if [ -f "en/custom_validated.tsv" ] && [ -d "en/clips" ]; then
-    # Create a temporary file to store the cleaned TSV
-    temp_tsv=$(mktemp)
-    
-    # Copy the header line
-    head -n 1 en/custom_validated.tsv > "$temp_tsv"
-    
-    # Directly process each line for better debugging and control
-    total_lines=$(wc -l < en/custom_validated.tsv)
-    empty_count=0
-    short_count=0
-    kept_count=0
-    
-    # First, display the first few lines of the TSV to understand its format
-    echo "Examining TSV format:"
-    head -n 5 en/custom_validated.tsv
-    
-    # Process line by line (starting from line 2 to skip header)
-    for ((i=2; i<=$total_lines; i++)); do
-        # Read the line
-        line=$(sed -n "${i}p" en/custom_validated.tsv)
+# Only clean up and create train/dev/test splits if we're not in merge mode
+if [ -z "$merge_into_dir" ]; then
+    # Clean up empty sentences and short sentences from dataset...
+    echo "Cleaning up empty sentences and short sentences from dataset..."
+    if [ -f "en/custom_validated.tsv" ] && [ -d "en/clips" ]; then
+        # Create a temporary file to store the cleaned TSV
+        temp_tsv=$(mktemp)
         
-        # Split line into columns - using proper TSV parsing
-        client_id=$(echo "$line" | cut -f1)
-        path=$(echo "$line" | cut -f2)
-        sentence=$(echo "$line" | cut -f4)  # Column 4 appears to be the sentence based on screenshot
+        # Copy the header line
+        head -n 1 en/custom_validated.tsv > "$temp_tsv"
         
-        # Extract MP3 filename
-        mp3_file=$(basename "$path")
-        mp3_path="en/clips/$mp3_file"
+        # Directly process each line for better debugging and control
+        total_lines=$(wc -l < en/custom_validated.tsv)
+        empty_count=0
+        short_count=0
+        kept_count=0
         
-        # Count words more accurately by replacing multiple spaces with single spaces first
-        cleaned_sentence=$(echo "$sentence" | tr -s ' ' | xargs)
-        word_count=$(echo "$cleaned_sentence" | wc -w)
+        # First, display the first few lines of the TSV to understand its format
+        echo "Examining TSV format:"
+        head -n 5 en/custom_validated.tsv
         
-        echo "Line $i: sentence=\"$sentence\", cleaned=\"$cleaned_sentence\", word count=$word_count"
-        
-        # Check if sentence is empty or has fewer than 3 words
-        if [ -z "$cleaned_sentence" ] || [ "$cleaned_sentence" = " " ]; then
-            if [ -f "$mp3_path" ]; then
-                echo "Removing empty sentence MP3: $mp3_file"
-                rm "$mp3_path"
+        # Process line by line (starting from line 2 to skip header)
+        for ((i=2; i<=$total_lines; i++)); do
+            # Read the line
+            line=$(sed -n "${i}p" en/custom_validated.tsv)
+            
+            # Split line into columns - using proper TSV parsing
+            client_id=$(echo "$line" | cut -f1)
+            path=$(echo "$line" | cut -f2)
+            sentence=$(echo "$line" | cut -f4)  # Column 4 appears to be the sentence based on screenshot
+            
+            # Extract MP3 filename
+            mp3_file=$(basename "$path")
+            mp3_path="en/clips/$mp3_file"
+            
+            # Count words more accurately by replacing multiple spaces with single spaces first
+            cleaned_sentence=$(echo "$sentence" | tr -s ' ' | xargs)
+            word_count=$(echo "$cleaned_sentence" | wc -w)
+            
+            echo "Line $i: sentence=\"$sentence\", cleaned=\"$cleaned_sentence\", word count=$word_count"
+            
+            # Check if sentence is empty or has fewer than 3 words
+            if [ -z "$cleaned_sentence" ] || [ "$cleaned_sentence" = " " ]; then
+                if [ -f "$mp3_path" ]; then
+                    echo "Removing empty sentence MP3: $mp3_file"
+                    rm "$mp3_path"
+                fi
+                empty_count=$((empty_count + 1))
+            elif [ $word_count -lt 3 ]; then
+                if [ -f "$mp3_path" ]; then
+                    echo "Removing short sentence MP3 (fewer than 3 words): $mp3_file"
+                    rm "$mp3_path"
+                fi
+                short_count=$((short_count + 1))
+            else
+                # Keep this row - it has 3+ words
+                echo "$line" >> "$temp_tsv"
+                kept_count=$((kept_count + 1))
             fi
-            empty_count=$((empty_count + 1))
-        elif [ $word_count -lt 3 ]; then
-            if [ -f "$mp3_path" ]; then
-                echo "Removing short sentence MP3 (fewer than 3 words): $mp3_file"
-                rm "$mp3_path"
-            fi
-            short_count=$((short_count + 1))
-        else
-            # Keep this row - it has 3+ words
-            echo "$line" >> "$temp_tsv"
-            kept_count=$((kept_count + 1))
+        done
+        
+        # Replace original file with cleaned version
+        mv "$temp_tsv" "en/custom_validated.tsv"
+        
+        echo "Cleaned dataset: removed $empty_count empty sentences and $short_count short sentences (fewer than 3 words)"
+        echo "Kept $kept_count sentences with 3+ words"
+        
+        # Double-check the MP3 files match the kept entries
+        tsv_mp3_count=$(tail -n +2 en/custom_validated.tsv | wc -l)
+        actual_mp3_count=$(find en/clips -name "*.mp3" | wc -l)
+        echo "TSV entries (excluding header): $tsv_mp3_count"
+        echo "MP3 files in en/clips: $actual_mp3_count"
+        
+        if [ "$tsv_mp3_count" != "$actual_mp3_count" ]; then
+            echo "Warning: Mismatch between TSV entries and MP3 files"
         fi
-    done
-    
-    # Replace original file with cleaned version
-    mv "$temp_tsv" "en/custom_validated.tsv"
-    
-    echo "Cleaned dataset: removed $empty_count empty sentences and $short_count short sentences (fewer than 3 words)"
-    echo "Kept $kept_count sentences with 3+ words"
-    
-    # Double-check the MP3 files match the kept entries
-    tsv_mp3_count=$(tail -n +2 en/custom_validated.tsv | wc -l)
-    actual_mp3_count=$(find en/clips -name "*.mp3" | wc -l)
-    echo "TSV entries (excluding header): $tsv_mp3_count"
-    echo "MP3 files in en/clips: $actual_mp3_count"
-    
-    if [ "$tsv_mp3_count" != "$actual_mp3_count" ]; then
-        echo "Warning: Mismatch between TSV entries and MP3 files"
+    else
+        echo "Warning: Cannot clean sentences - either TSV file or clips directory not found."
     fi
-else
-    echo "Warning: Cannot clean sentences - either TSV file or clips directory not found."
-fi
 
-# Create train, dev, and test splits
-echo "Creating train, dev, and test splits with dev ratio $dev_ratio and test ratio $test_ratio..."
-if [ -f "en/custom_validated.tsv" ]; then
-    # Create a Python script for splitting
-    cat > split_tsv_into_sets.py << 'EOL'
+    # Create train, dev, and test splits
+    echo "Creating train, dev, and test splits with dev ratio $dev_ratio and test ratio $test_ratio..."
+    if [ -f "en/custom_validated.tsv" ]; then
+        # Create a Python script for splitting
+        cat > split_tsv_into_sets.py << 'EOL'
 #!/usr/bin/env python3
 import argparse
 import csv
@@ -392,37 +578,42 @@ if __name__ == "__main__":
     main()
 EOL
 
-    # Make the script executable
-    chmod +x split_tsv_into_sets.py
-    
-    # Run the script
-    python split_tsv_into_sets.py --input-tsv="en/custom_validated.tsv" --dev-ratio="$dev_ratio" --test-ratio="$test_ratio"
-    
-    # Verify the results
-    train_count=$(tail -n +2 en/train.tsv | wc -l)
-    dev_count=$(tail -n +2 en/dev.tsv | wc -l)
-    test_count=$(tail -n +2 en/test.tsv | wc -l)
-    total_count=$((train_count + dev_count + test_count))
-    
-    echo "Dataset splits created:"
-    echo "  - Train set: $train_count utterances"
-    echo "  - Dev set: $dev_count utterances"
-    echo "  - Test set: $test_count utterances"
-    echo "  - Total: $total_count utterances"
+        # Make the script executable
+        chmod +x split_tsv_into_sets.py
+        
+        # Run the script
+        python split_tsv_into_sets.py --input-tsv="en/custom_validated.tsv" --dev-ratio="$dev_ratio" --test-ratio="$test_ratio"
+        
+        # Verify the results
+        train_count=$(tail -n +2 en/train.tsv | wc -l)
+        dev_count=$(tail -n +2 en/dev.tsv | wc -l)
+        test_count=$(tail -n +2 en/test.tsv | wc -l)
+        total_count=$((train_count + dev_count + test_count))
+        
+        echo "Dataset splits created:"
+        echo "  - Train set: $train_count utterances"
+        echo "  - Dev set: $dev_count utterances"
+        echo "  - Test set: $test_count utterances"
+        echo "  - Total: $total_count utterances"
+    else
+        echo "Warning: Cannot create dataset splits - custom_validated.tsv not found."
+    fi
+
+    # Print statistics about the final dataset
+    echo "Dataset statistics:"
+    if [ -f "en/custom_validated.tsv" ]; then
+        total_lines=$(wc -l < "en/custom_validated.tsv")
+        data_lines=$((total_lines - 1))  # Subtract header line
+        echo "Total utterances: $data_lines"
+    fi
+
+    echo "SpeechOcean762 preparation completed." 
+    echo
+    echo "Example usage of the prepared dataset:"
+    echo "  - Use all data: bash prepare_speechocean762.sh"
+    echo "  - Custom split ratios: bash prepare_speechocean762.sh --dev-ratio 0.15 --test-ratio 0.15"
+    echo "  - Merge into existing dataset: bash prepare_speechocean762.sh --merge-into-dir=/path/to/target/dataset"
 else
-    echo "Warning: Cannot create dataset splits - custom_validated.tsv not found."
-fi
-
-# Print statistics about the final dataset
-echo "Dataset statistics:"
-if [ -f "en/custom_validated.tsv" ]; then
-    total_lines=$(wc -l < "en/custom_validated.tsv")
-    data_lines=$((total_lines - 1))  # Subtract header line
-    echo "Total utterances: $data_lines"
-fi
-
-echo "SpeechOcean762 preparation completed." 
-echo
-echo "Example usage of the prepared dataset:"
-echo "  - Use all data: bash prepare_speechocean762.sh"
-echo "  - Custom split ratios: bash prepare_speechocean762.sh --dev-ratio 0.15 --test-ratio 0.15" 
+    echo "Skipping dataset cleaning and splits since we're in merge mode."
+    echo "To clean and split the merged dataset, run this script directly on $merge_into_dir."
+fi 
