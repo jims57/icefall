@@ -494,9 +494,9 @@ else
             echo "Will output MP3 files directly to $output_clips_dir"
         else
             # Create local clips directory if it doesn't exist
-            mkdir -p clips
-            output_clips_dir="clips"
-            output_tsv="custom_validated.tsv"
+            mkdir -p en/clips
+            output_clips_dir="en/clips"
+            output_tsv="en/custom_validated.tsv"
         fi
         
         # Run the conversion script
@@ -598,9 +598,7 @@ EOL
             chmod +x merge_tsv_files.py
             
             # Merge TSV files
-            if [ -f "custom_validated.tsv" ]; then
-                source_tsv="custom_validated.tsv"
-            elif [ -f "en/custom_validated.tsv" ]; then
+            if [ -f "en/custom_validated.tsv" ]; then
                 source_tsv="en/custom_validated.tsv"
             else
                 echo "Error: Could not find source TSV file to merge"
@@ -619,9 +617,7 @@ EOL
             # Target TSV doesn't exist, create it from scratch
             echo "Target custom_validated.tsv doesn't exist, creating it..."
             
-            if [ -f "custom_validated.tsv" ]; then
-                cp custom_validated.tsv "$merge_into_dir/en/custom_validated.tsv"
-            elif [ -f "en/custom_validated.tsv" ]; then
+            if [ -f "en/custom_validated.tsv" ]; then
                 cp en/custom_validated.tsv "$merge_into_dir/en/custom_validated.tsv"
             else
                 echo "Error: Could not find TSV file to copy to target location"
@@ -895,5 +891,49 @@ else
         echo "  - Total: $total_count utterances"
     else
         echo "Warning: Cannot create dataset splits - $merge_into_dir/en/custom_validated.tsv not found."
+    fi
+fi
+
+# After running the conversion script, ensure the TSV file exists in the merge directory
+if [ -n "$merge_into_dir" ]; then
+    # Check if the TSV file exists in the merge directory
+    if [ ! -f "$merge_into_dir/en/custom_validated.tsv" ]; then
+        echo "Warning: custom_validated.tsv not found in merge directory."
+        
+        # Check if we have a local TSV file to copy
+        if [ -f "en/custom_validated.tsv" ]; then
+            echo "Copying local custom_validated.tsv to merge directory..."
+            cp "en/custom_validated.tsv" "$merge_into_dir/en/custom_validated.tsv"
+            echo "Successfully copied custom_validated.tsv to $merge_into_dir/en/"
+        else
+            echo "Error: No custom_validated.tsv file found to copy to merge directory."
+            exit 1
+        fi
+    else
+        echo "Found existing custom_validated.tsv in merge directory."
+        
+        # Check if we need to merge with local TSV
+        if [ -f "en/custom_validated.tsv" ]; then
+            echo "Merging local custom_validated.tsv with merge directory TSV..."
+            
+            # Create a temporary file for merging
+            cat "$merge_into_dir/en/custom_validated.tsv" > merged_tsv.tmp
+            
+            # Append local TSV (skipping header)
+            tail -n +2 "en/custom_validated.tsv" >> merged_tsv.tmp
+            
+            # Replace the merge directory TSV with the merged file
+            mv merged_tsv.tmp "$merge_into_dir/en/custom_validated.tsv"
+            
+            echo "Successfully merged TSV files."
+        fi
+    fi
+    
+    # Verify the TSV file exists in the merge directory
+    if [ -f "$merge_into_dir/en/custom_validated.tsv" ]; then
+        echo "Verified: custom_validated.tsv exists in merge directory."
+    else
+        echo "Error: Failed to create custom_validated.tsv in merge directory."
+        exit 1
     fi
 fi
