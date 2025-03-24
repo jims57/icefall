@@ -77,8 +77,34 @@ done
 # Check if the output directory already exists
 if [ -d "$output_dir" ]; then
   echo "Output directory $output_dir already exists."
-  echo "Skipping download to save time. If you want to re-download, please remove the directory first."
+  
+  # Check if ZIP files already exist
+  cn_speakers=("BWC" "LXC" "NCC" "TXHC")
+  cn_zips_exist=true
+  
+  for speaker in "${cn_speakers[@]}"; do
+    if [ ! -f "$output_dir/$speaker.zip" ]; then
+      cn_zips_exist=false
+      break
+    fi
+  done
+  
+  if [ "$use_cn_accented_only" = true ] && [ "$cn_zips_exist" = true ]; then
+    echo "Chinese-accented speaker ZIP files already exist. Skipping download."
+  elif [ -f "$output_dir/ABA.zip" ] && [ -f "$output_dir/BWC.zip" ]; then
+    # Check for at least two ZIP files as a heuristic for a complete download
+    echo "ZIP files already exist in $output_dir. Skipping download."
+  else
+    echo "ZIP files not found in $output_dir. Will download the dataset."
+    # Remove the directory to force a clean download
+    rm -rf "$output_dir"
+  fi
 else
+  echo "Output directory $output_dir does not exist. Will download the dataset."
+fi
+
+# Only download if the directory doesn't exist
+if [ ! -d "$output_dir" ]; then
   # Check if the download script exists
   download_script="download_l2_arctic_ds_from_official_site.py"
   if [ ! -f "$download_script" ]; then
@@ -95,10 +121,7 @@ else
   python3 "$download_script" --output-dir "$output_dir"
 
   # Check if download was successful
-  if [ $? -eq 0 ]; then
-    echo "L2-Arctic dataset preparation completed successfully."
-    echo "Dataset is available at: $output_dir"
-  else
+  if [ $? -ne 0 ]; then
     echo "Error: Failed to download or extract the L2-Arctic dataset."
     exit 1
   fi
@@ -207,28 +230,38 @@ def extract_zip_files(l2_arctic_dir, cn_accented_only=False):
     """Extract ZIP files in the L2-Arctic directory"""
     cn_accented_speakers = ["BWC", "LXC", "NCC", "TXHC"]
     
-    # Get all ZIP files in the directory
-    zip_files = glob.glob(os.path.join(l2_arctic_dir, "*.zip"))
-    print(f"Found {len(zip_files)} ZIP files in {l2_arctic_dir}")
-    
-    # Determine which ZIP files to extract
+    # Determine which speakers to process
     if cn_accented_only:
-        zip_files_to_extract = [f for f in zip_files if any(speaker in os.path.basename(f) for speaker in cn_accented_speakers)]
-        print(f"Will extract {len(zip_files_to_extract)} Chinese-accented speaker ZIP files")
+        speakers_to_process = cn_accented_speakers
     else:
-        zip_files_to_extract = zip_files
-        print(f"Will extract all {len(zip_files_to_extract)} ZIP files")
+        # Get all ZIP files to determine all speakers
+        zip_files = glob.glob(os.path.join(l2_arctic_dir, "*.zip"))
+        speakers_to_process = [os.path.basename(f).split('.')[0] for f in zip_files]
     
-    # Extract each ZIP file
-    for zip_file in zip_files_to_extract:
-        speaker = os.path.basename(zip_file).split('.')[0]
-        extract_dir = os.path.join(l2_arctic_dir, speaker)
+    # Check which speakers need extraction
+    speakers_to_extract = []
+    for speaker in speakers_to_process:
+        speaker_dir = os.path.join(l2_arctic_dir, speaker)
+        nested_speaker_dir = os.path.join(speaker_dir, speaker)
+        wav_dir = os.path.join(nested_speaker_dir, "wav") if os.path.exists(nested_speaker_dir) else None
         
-        # Skip if already extracted
-        if os.path.exists(extract_dir) and os.path.isdir(extract_dir):
-            print(f"Directory {extract_dir} already exists, skipping extraction")
+        # Check if the speaker directory is already properly extracted
+        if (os.path.exists(speaker_dir) and 
+            ((os.path.exists(nested_speaker_dir) and os.path.isdir(nested_speaker_dir)) or
+             (wav_dir and os.path.isdir(wav_dir) and len(glob.glob(os.path.join(wav_dir, "*.wav"))) > 0))):
+            print(f"Speaker {speaker} already extracted, skipping extraction")
+        else:
+            # Need to extract this speaker
+            speakers_to_extract.append(speaker)
+    
+    # Extract only the speakers that need extraction
+    for speaker in speakers_to_extract:
+        zip_file = os.path.join(l2_arctic_dir, f"{speaker}.zip")
+        if not os.path.exists(zip_file):
+            print(f"Warning: ZIP file for speaker {speaker} not found at {zip_file}")
             continue
-        
+            
+        extract_dir = os.path.join(l2_arctic_dir, speaker)
         print(f"Extracting {zip_file} to {extract_dir}")
         try:
             with zipfile.ZipFile(zip_file, 'r') as zip_ref:
@@ -237,8 +270,8 @@ def extract_zip_files(l2_arctic_dir, cn_accented_only=False):
         except Exception as e:
             print(f"Error extracting {zip_file}: {e}", file=sys.stderr)
     
-    # Return the list of speakers that were extracted
-    return [os.path.basename(f).split('.')[0] for f in zip_files_to_extract]
+    # Return all speakers to process, not just the ones we extracted
+    return speakers_to_process
 
 def find_wav_files(speaker_dir):
     """Find WAV files in the speaker directory with the correct structure"""
@@ -297,6 +330,22 @@ def main():
     
     # Create output directory if it doesn't exist
     os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Check if MP3 files already exist
+    existing_mp3_files = glob.glob(os.path.join(args.output_dir, "*.mp3"))
+    if existing_mp3_files and args.skip_audio_conversion:
+        print(f"Found {len(existing_mp3_files)} existing MP3 files in {args.output_dir}")
+        print("Skipping audio conversion as requested")
+        
+        # Check if TSV file exists
+        if os.path.exists(args.output_tsv):
+            print(f"TSV file {args.output_tsv} already exists")
+            print("Skipping TSV generation")
+            return
+        else:
+            print(f"TSV file {args.output_tsv} does not exist")
+            print("Will generate TSV file from existing MP3 files")
+            # Continue with the rest of the script to generate TSV
     
     # Extract ZIP files first
     extracted_speakers = extract_zip_files(args.l2_arctic_dir, args.cn_accented_only)
