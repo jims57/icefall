@@ -602,7 +602,13 @@ EOL
         if [ -d "clips" ]; then
             # Check if en/clips already exists
             if [ -d "en/clips" ]; then
-                echo "Warning: en/clips already exists. Skipping move operation."
+                echo "Warning: en/clips already exists. Moving files instead of the whole directory."
+                # Move all MP3 files from clips to en/clips
+                find clips -name "*.mp3" -exec mv {} en/clips/ \;
+                echo "Moved MP3 files from clips to en/clips."
+                # Remove the original clips directory
+                rm -rf clips
+                echo "Removed original clips directory."
             else
                 mv clips en/
                 echo "Moved clips folder to en directory."
