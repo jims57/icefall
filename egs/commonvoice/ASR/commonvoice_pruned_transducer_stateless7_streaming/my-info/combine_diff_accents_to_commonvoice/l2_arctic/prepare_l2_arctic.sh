@@ -692,3 +692,208 @@ if [ -n "$merge_into_dir" ]; then
 else
     echo "Data is available in the 'en' directory."
 fi
+
+# Create a Python script to split the data into train, dev, and test sets
+cat > split_data.py << 'EOL'
+#!/usr/bin/env python3
+import argparse
+import csv
+import os
+import random
+from pathlib import Path
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Create train, dev, and test TSV files from custom_validated.tsv."
+    )
+    parser.add_argument(
+        "--dev-ratio",
+        type=float,
+        default=0.1,
+        help="Ratio of rows to use for dev set.",
+    )
+    parser.add_argument(
+        "--test-ratio",
+        type=float,
+        default=0.1,
+        help="Ratio of rows to use for test set.",
+    )
+    parser.add_argument(
+        "--custom-validated-tsv",
+        type=str,
+        required=True,
+        help="Path to the custom_validated.tsv file.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducibility.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=".",
+        help="Directory to write the output TSV files.",
+    )
+    return parser.parse_args()
+
+def write_tsv_file(filename, header, rows):
+    """Write rows to a TSV file with the given header."""
+    with open(filename, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f, delimiter="\t")
+        writer.writerow(header)
+        writer.writerows(rows)
+
+def main():
+    args = parse_args()
+    
+    # Validate the input parameters
+    if args.dev_ratio + args.test_ratio >= 1.0:
+        raise ValueError("The sum of dev_ratio and test_ratio should be less than 1.0")
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Read all rows from custom_validated.tsv
+    all_rows = []
+    with open(args.custom_validated_tsv, "r", encoding="utf-8") as f:
+        reader = csv.reader(f, delimiter="\t")
+        header = next(reader)  # Get the header
+        for row in reader:
+            all_rows.append(row)
+    
+    print(f"Total data rows in {args.custom_validated_tsv}: {len(all_rows)}")
+    
+    # Shuffle the rows to ensure randomness in the split
+    random.seed(args.seed)
+    random.shuffle(all_rows)
+    
+    num_to_select = len(all_rows)
+    
+    # For small datasets: ensure exact allocation with minimums of 1 for dev/test
+    if num_to_select >= 3:
+        # For small datasets, we need to be very precise
+        if num_to_select <= 10:
+            # With small datasets, ensure at least 1 each for dev/test, and rest to train
+            dev_size = 1
+            test_size = 1
+            train_size = num_to_select - dev_size - test_size
+        else:
+            # For larger datasets, calculate based on ratios
+            dev_size = max(1, round(num_to_select * args.dev_ratio))
+            test_size = max(1, round(num_to_select * args.test_ratio))
+            
+            # Ensure we don't over-allocate (leaving no train data)
+            if dev_size + test_size >= num_to_select:
+                dev_size = 1
+                test_size = 1
+                
+            # All remaining rows go to train
+            train_size = num_to_select - dev_size - test_size
+    else:
+        # If we have fewer than 3 rows, prioritize train set
+        print("Warning: Not enough data for all three splits. Prioritizing train set.")
+        if num_to_select == 2:
+            dev_size = 1
+            test_size = 0
+            train_size = 1
+        elif num_to_select == 1:
+            dev_size = 0
+            test_size = 0
+            train_size = 1
+        else:  # num_to_select == 0
+            dev_size = 0
+            test_size = 0
+            train_size = 0
+    
+    print(f"Creating dev.tsv with {dev_size} data rows")
+    print(f"Creating test.tsv with {test_size} data rows")
+    print(f"Creating train.tsv with {train_size} data rows")
+    print(f"Total data rows in all splits: {dev_size + test_size + train_size}")
+    
+    # Verify the total count is correct
+    assert dev_size + test_size + train_size == num_to_select, \
+           f"Row count mismatch: {dev_size} + {test_size} + {train_size} != {num_to_select}"
+    
+    # Split the rows
+    dev_rows = all_rows[:dev_size]
+    test_rows = all_rows[dev_size:dev_size + test_size]
+    train_rows = all_rows[dev_size + test_size:]
+    
+    # Double-check that all rows are accounted for
+    assert len(dev_rows) + len(test_rows) + len(train_rows) == len(all_rows), \
+           f"Error: Not all rows were allocated to splits. Got {len(dev_rows) + len(test_rows) + len(train_rows)} but expected {len(all_rows)}"
+    
+    # Write the TSV files
+    write_tsv_file(os.path.join(args.output_dir, "dev.tsv"), header, dev_rows)
+    write_tsv_file(os.path.join(args.output_dir, "test.tsv"), header, test_rows)
+    write_tsv_file(os.path.join(args.output_dir, "train.tsv"), header, train_rows)
+
+    # Additional debug info to confirm file sizes
+    print(f"Wrote {len(dev_rows)} data rows to dev.tsv")
+    print(f"Wrote {len(test_rows)} data rows to test.tsv")
+    print(f"Wrote {len(train_rows)} data rows to train.tsv")
+    print(f"Each file also has 1 header row")
+    
+    print("Done!")
+
+if __name__ == "__main__":
+    main()
+EOL
+
+# Make the script executable
+chmod +x split_data.py
+
+# Add code to run the split_data.py script after processing
+if [ -z "$merge_into_dir" ]; then
+    # If we're not in merge mode, create the splits in the local en directory
+    if [ -f "en/custom_validated.tsv" ]; then
+        echo "Creating train, dev, and test splits..."
+        python3 split_data.py \
+            --custom-validated-tsv="en/custom_validated.tsv" \
+            --dev-ratio=0.1 \
+            --test-ratio=0.1 \
+            --output-dir="en" \
+            --seed=42
+        
+        # Print statistics about the splits
+        train_count=$(tail -n +2 en/train.tsv | wc -l)
+        dev_count=$(tail -n +2 en/dev.tsv | wc -l)
+        test_count=$(tail -n +2 en/test.tsv | wc -l)
+        total_count=$((train_count + dev_count + test_count))
+        
+        echo "Dataset splits created:"
+        echo "  - Train set: $train_count utterances"
+        echo "  - Dev set: $dev_count utterances"
+        echo "  - Test set: $test_count utterances"
+        echo "  - Total: $total_count utterances"
+    else
+        echo "Warning: Cannot create dataset splits - en/custom_validated.tsv not found."
+    fi
+else
+    # If we're in merge mode, create the splits in the target directory
+    if [ -f "$merge_into_dir/en/custom_validated.tsv" ]; then
+        echo "Creating train, dev, and test splits in $merge_into_dir/en..."
+        python3 split_data.py \
+            --custom-validated-tsv="$merge_into_dir/en/custom_validated.tsv" \
+            --dev-ratio=0.1 \
+            --test-ratio=0.1 \
+            --output-dir="$merge_into_dir/en" \
+            --seed=42
+        
+        # Print statistics about the splits
+        train_count=$(tail -n +2 "$merge_into_dir/en/train.tsv" | wc -l)
+        dev_count=$(tail -n +2 "$merge_into_dir/en/dev.tsv" | wc -l)
+        test_count=$(tail -n +2 "$merge_into_dir/en/test.tsv" | wc -l)
+        total_count=$((train_count + dev_count + test_count))
+        
+        echo "Dataset splits created in $merge_into_dir/en:"
+        echo "  - Train set: $train_count utterances"
+        echo "  - Dev set: $dev_count utterances"
+        echo "  - Test set: $test_count utterances"
+        echo "  - Total: $total_count utterances"
+    else
+        echo "Warning: Cannot create dataset splits - $merge_into_dir/en/custom_validated.tsv not found."
+    fi
+fi
