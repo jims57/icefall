@@ -905,6 +905,18 @@ if [ -n "$merge_into_dir" ]; then
             echo "Copying local custom_validated.tsv to merge directory..."
             cp "en/custom_validated.tsv" "$merge_into_dir/en/custom_validated.tsv"
             echo "Successfully copied custom_validated.tsv to $merge_into_dir/en/"
+            
+            # Verify row count
+            local_row_count=$(wc -l < "en/custom_validated.tsv")
+            target_row_count=$(wc -l < "$merge_into_dir/en/custom_validated.tsv")
+            echo "Local TSV has $local_row_count rows"
+            echo "Target TSV has $target_row_count rows"
+            
+            if [ "$local_row_count" -ne "$target_row_count" ]; then
+                echo "Warning: Row count mismatch between local and target TSV files"
+                echo "Using local TSV file as the correct version"
+                cp "en/custom_validated.tsv" "$merge_into_dir/en/custom_validated.tsv"
+            fi
         else
             echo "Error: No custom_validated.tsv file found to copy to merge directory."
             exit 1
@@ -914,24 +926,251 @@ if [ -n "$merge_into_dir" ]; then
         
         # Check if we need to merge with local TSV
         if [ -f "en/custom_validated.tsv" ]; then
-            echo "Merging local custom_validated.tsv with merge directory TSV..."
+            echo "Creating a clean merge of local custom_validated.tsv with merge directory TSV..."
             
-            # Create a temporary file for merging
-            cat "$merge_into_dir/en/custom_validated.tsv" > merged_tsv.tmp
+            # Create a Python script for proper TSV merging
+            cat > merge_tsv.py << 'EOL'
+#!/usr/bin/env python3
+import sys
+import csv
+import os
+
+def main():
+    if len(sys.argv) != 4:
+        print("Usage: python merge_tsv.py <target_tsv> <source_tsv> <output_tsv>")
+        sys.exit(1)
+    
+    target_file = sys.argv[1]
+    source_file = sys.argv[2]
+    output_file = sys.argv[3]
+    
+    # Read the target file (including header)
+    target_rows = []
+    target_paths = set()
+    with open(target_file, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        header = next(reader)
+        target_rows.append(header)
+        
+        for row in reader:
+            if len(row) > 1:  # Ensure row has enough columns
+                path = row[1]
+                target_paths.add(path)
+            target_rows.append(row)
+    
+    # Read the source file (excluding header)
+    source_rows = []
+    added_count = 0
+    with open(source_file, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        next(reader)  # Skip header
+        
+        for row in reader:
+            if len(row) > 1:  # Ensure row has enough columns
+                path = row[1]
+                if path not in target_paths:
+                    source_rows.append(row)
+                    target_paths.add(path)
+                    added_count += 1
+    
+    # Write the merged file
+    with open(output_file, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f, delimiter='\t')
+        for row in target_rows:
+            writer.writerow(row)
+        for row in source_rows:
+            writer.writerow(row)
+    
+    print(f"Added {added_count} new entries from source to target")
+    print(f"Total entries in merged file: {len(target_rows) - 1 + added_count}")
+
+if __name__ == "__main__":
+    main()
+EOL
             
-            # Append local TSV (skipping header)
-            tail -n +2 "en/custom_validated.tsv" >> merged_tsv.tmp
+            chmod +x merge_tsv.py
             
-            # Replace the merge directory TSV with the merged file
-            mv merged_tsv.tmp "$merge_into_dir/en/custom_validated.tsv"
+            # Run the merge script
+            echo "Merging TSV files..."
+            python merge_tsv.py "$merge_into_dir/en/custom_validated.tsv" "en/custom_validated.tsv" "$merge_into_dir/en/custom_validated.tsv.new"
             
-            echo "Successfully merged TSV files."
+            # Replace the original with the merged file
+            mv "$merge_into_dir/en/custom_validated.tsv.new" "$merge_into_dir/en/custom_validated.tsv"
+            
+            # Verify row count
+            merged_row_count=$(wc -l < "$merge_into_dir/en/custom_validated.tsv")
+            echo "Merged TSV has $merged_row_count rows"
         fi
     fi
     
     # Verify the TSV file exists in the merge directory
     if [ -f "$merge_into_dir/en/custom_validated.tsv" ]; then
         echo "Verified: custom_validated.tsv exists in merge directory."
+        
+        # Count entries in TSV file (excluding header)
+        tsv_entry_count=$(tail -n +2 "$merge_into_dir/en/custom_validated.tsv" | wc -l)
+        echo "TSV file contains $tsv_entry_count entries (excluding header)"
+        
+        # Count MP3 files in clips directory
+        mp3_count=$(find "$merge_into_dir/en/clips" -name "*.mp3" | wc -l)
+        echo "Clips directory contains $mp3_count MP3 files"
+    else
+        echo "Error: Failed to create custom_validated.tsv in merge directory."
+        exit 1
+    fi
+fi
+
+# After handling the TSV file, ensure the MP3 files are moved to the merge directory
+if [ -n "$merge_into_dir" ]; then
+    # Check if the local clips directory exists
+    if [ -d "en/clips" ]; then
+        echo "Copying MP3 files to merge directory..."
+        
+        # Create target clips directory if it doesn't exist
+        if [ ! -d "$merge_into_dir/en/clips" ]; then
+            echo "Creating clips directory in merge location..."
+            mkdir -p "$merge_into_dir/en/clips"
+        fi
+        
+        # Count MP3 files before copying
+        local_mp3_count=$(find "en/clips" -name "*.mp3" | wc -l)
+        echo "Found $local_mp3_count MP3 files to copy"
+        
+        # Copy MP3 files to merge directory
+        if [ $local_mp3_count -gt 0 ]; then
+            # Use find to locate all MP3 files and copy them
+            find "en/clips" -name "*.mp3" -exec cp {} "$merge_into_dir/en/clips/" \;
+            echo "Copied MP3 files to $merge_into_dir/en/clips/"
+            
+            # Count MP3 files after copying
+            copied_count=$(find "$merge_into_dir/en/clips" -name "*.mp3" | wc -l)
+            echo "Verified MP3 files in merge directory (should include previously existing files)"
+            echo "Total MP3 files in merge directory: $copied_count"
+        else
+            echo "No MP3 files found to copy"
+        fi
+    else
+        echo "No local clips directory found"
+    fi
+    
+    # Check if the TSV file exists in the merge directory
+    if [ ! -f "$merge_into_dir/en/custom_validated.tsv" ]; then
+        echo "Warning: custom_validated.tsv not found in merge directory."
+        
+        # Check if we have a local TSV file to copy
+        if [ -f "en/custom_validated.tsv" ]; then
+            echo "Copying local custom_validated.tsv to merge directory..."
+            cp "en/custom_validated.tsv" "$merge_into_dir/en/custom_validated.tsv"
+            echo "Successfully copied custom_validated.tsv to $merge_into_dir/en/"
+            
+            # Verify row count
+            local_row_count=$(wc -l < "en/custom_validated.tsv")
+            target_row_count=$(wc -l < "$merge_into_dir/en/custom_validated.tsv")
+            echo "Local TSV has $local_row_count rows"
+            echo "Target TSV has $target_row_count rows"
+            
+            if [ "$local_row_count" -ne "$target_row_count" ]; then
+                echo "Warning: Row count mismatch between local and target TSV files"
+                echo "Using local TSV file as the correct version"
+                cp "en/custom_validated.tsv" "$merge_into_dir/en/custom_validated.tsv"
+            fi
+        else
+            echo "Error: No custom_validated.tsv file found to copy to merge directory."
+            exit 1
+        fi
+    else
+        echo "Found existing custom_validated.tsv in merge directory."
+        
+        # Check if we need to merge with local TSV
+        if [ -f "en/custom_validated.tsv" ]; then
+            echo "Creating a clean merge of local custom_validated.tsv with merge directory TSV..."
+            
+            # Create a Python script for proper TSV merging
+            cat > merge_tsv.py << 'EOL'
+#!/usr/bin/env python3
+import sys
+import csv
+import os
+
+def main():
+    if len(sys.argv) != 4:
+        print("Usage: python merge_tsv.py <target_tsv> <source_tsv> <output_tsv>")
+        sys.exit(1)
+    
+    target_file = sys.argv[1]
+    source_file = sys.argv[2]
+    output_file = sys.argv[3]
+    
+    # Read the target file (including header)
+    target_rows = []
+    target_paths = set()
+    with open(target_file, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        header = next(reader)
+        target_rows.append(header)
+        
+        for row in reader:
+            if len(row) > 1:  # Ensure row has enough columns
+                path = row[1]
+                target_paths.add(path)
+            target_rows.append(row)
+    
+    # Read the source file (excluding header)
+    source_rows = []
+    added_count = 0
+    with open(source_file, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        next(reader)  # Skip header
+        
+        for row in reader:
+            if len(row) > 1:  # Ensure row has enough columns
+                path = row[1]
+                if path not in target_paths:
+                    source_rows.append(row)
+                    target_paths.add(path)
+                    added_count += 1
+    
+    # Write the merged file
+    with open(output_file, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f, delimiter='\t')
+        for row in target_rows:
+            writer.writerow(row)
+        for row in source_rows:
+            writer.writerow(row)
+    
+    print(f"Added {added_count} new entries from source to target")
+    print(f"Total entries in merged file: {len(target_rows) - 1 + added_count}")
+
+if __name__ == "__main__":
+    main()
+EOL
+            
+            chmod +x merge_tsv.py
+            
+            # Run the merge script
+            echo "Merging TSV files..."
+            python merge_tsv.py "$merge_into_dir/en/custom_validated.tsv" "en/custom_validated.tsv" "$merge_into_dir/en/custom_validated.tsv.new"
+            
+            # Replace the original with the merged file
+            mv "$merge_into_dir/en/custom_validated.tsv.new" "$merge_into_dir/en/custom_validated.tsv"
+            
+            # Verify row count
+            merged_row_count=$(wc -l < "$merge_into_dir/en/custom_validated.tsv")
+            echo "Merged TSV has $merged_row_count rows"
+        fi
+    fi
+    
+    # Verify the TSV file exists in the merge directory
+    if [ -f "$merge_into_dir/en/custom_validated.tsv" ]; then
+        echo "Verified: custom_validated.tsv exists in merge directory."
+        
+        # Count entries in TSV file (excluding header)
+        tsv_entry_count=$(tail -n +2 "$merge_into_dir/en/custom_validated.tsv" | wc -l)
+        echo "TSV file contains $tsv_entry_count entries (excluding header)"
+        
+        # Count MP3 files in clips directory
+        mp3_count=$(find "$merge_into_dir/en/clips" -name "*.mp3" | wc -l)
+        echo "Clips directory contains $mp3_count MP3 files"
     else
         echo "Error: Failed to create custom_validated.tsv in merge directory."
         exit 1
