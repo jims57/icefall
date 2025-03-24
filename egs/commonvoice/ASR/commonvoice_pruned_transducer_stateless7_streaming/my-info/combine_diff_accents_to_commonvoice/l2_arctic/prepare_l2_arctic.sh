@@ -1185,3 +1185,167 @@ EOL
 else
     echo "Warning: Cannot regenerate dataset splits - custom_validated.tsv not found in merge directory"
 fi
+
+# After merging the TSV files, ensure all MP3 files referenced in the TSV exist in the clips directory
+if [ -n "$merge_into_dir" ] && [ -f "$merge_into_dir/en/custom_validated.tsv" ] && [ -d "en/clips" ]; then
+    echo "Ensuring all MP3 files referenced in the merged TSV exist in the target clips directory..."
+    
+    # Create a Python script to extract MP3 filenames from TSV and copy missing files
+    cat > copy_missing_mp3s.py << 'EOL'
+#!/usr/bin/env python3
+import os
+import sys
+import csv
+import shutil
+from pathlib import Path
+
+def main():
+    if len(sys.argv) != 4:
+        print("Usage: python copy_missing_mp3s.py <tsv_file> <source_clips_dir> <target_clips_dir>")
+        sys.exit(1)
+    
+    tsv_file = sys.argv[1]
+    source_clips_dir = Path(sys.argv[2])
+    target_clips_dir = Path(sys.argv[3])
+    
+    # Ensure target directory exists
+    target_clips_dir.mkdir(exist_ok=True, parents=True)
+    
+    # Get list of MP3 files already in target directory
+    existing_mp3s = set(f.name for f in target_clips_dir.glob("*.mp3"))
+    print(f"Found {len(existing_mp3s)} existing MP3 files in target directory")
+    
+    # Extract MP3 filenames from TSV
+    mp3_paths = []
+    with open(tsv_file, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        next(reader)  # Skip header
+        for row in reader:
+            if len(row) > 1:
+                path = row[1]
+                if path:
+                    mp3_paths.append(path)
+    
+    print(f"Found {len(mp3_paths)} MP3 paths in TSV file")
+    
+    # Determine which files need to be copied
+    files_to_copy = []
+    for path in mp3_paths:
+        filename = os.path.basename(path)
+        if filename not in existing_mp3s:
+            source_file = source_clips_dir / filename
+            if source_file.exists():
+                files_to_copy.append((source_file, target_clips_dir / filename))
+    
+    print(f"Found {len(files_to_copy)} MP3 files to copy")
+    
+    # Copy missing files
+    copied_count = 0
+    for source, target in files_to_copy:
+        try:
+            shutil.copy2(source, target)
+            copied_count += 1
+            if copied_count % 100 == 0:
+                print(f"Copied {copied_count} files so far...")
+        except Exception as e:
+            print(f"Error copying {source} to {target}: {e}")
+    
+    print(f"Successfully copied {copied_count} MP3 files to target directory")
+    
+    # Verify all files exist
+    missing_files = []
+    for path in mp3_paths:
+        filename = os.path.basename(path)
+        target_file = target_clips_dir / filename
+        if not target_file.exists():
+            missing_files.append(filename)
+    
+    if missing_files:
+        print(f"Warning: {len(missing_files)} MP3 files referenced in TSV are still missing")
+        print(f"First few missing files: {missing_files[:5]}")
+    else:
+        print("All MP3 files referenced in TSV exist in target directory")
+    
+    # Count final MP3 files
+    final_count = len(list(target_clips_dir.glob("*.mp3")))
+    print(f"Final count of MP3 files in target directory: {final_count}")
+
+if __name__ == "__main__":
+    main()
+EOL
+    
+    chmod +x copy_missing_mp3s.py
+    
+    # Run the script to copy missing MP3 files
+    echo "Copying missing MP3 files to target clips directory..."
+    python copy_missing_mp3s.py "$merge_into_dir/en/custom_validated.tsv" "en/clips" "$merge_into_dir/en/clips"
+    
+    # Verify MP3 count matches TSV entry count
+    mp3_count=$(find "$merge_into_dir/en/clips" -name "*.mp3" | wc -l)
+    tsv_entry_count=$(tail -n +2 "$merge_into_dir/en/custom_validated.tsv" | wc -l)
+    
+    echo "MP3 files in target clips directory: $mp3_count"
+    echo "Entries in target custom_validated.tsv: $tsv_entry_count"
+    
+    if [ "$mp3_count" -ne "$tsv_entry_count" ]; then
+        echo "Warning: Mismatch between MP3 count ($mp3_count) and TSV entry count ($tsv_entry_count)"
+        
+        # Create a script to delete MP3 files not in the TSV
+        cat > delete_unused_mp3s.py << 'EOL'
+#!/usr/bin/env python3
+import os
+import sys
+import csv
+from pathlib import Path
+
+def main():
+    if len(sys.argv) != 3:
+        print("Usage: python delete_unused_mp3s.py <tsv_file> <clips_dir>")
+        sys.exit(1)
+    
+    tsv_file = sys.argv[1]
+    clips_dir = Path(sys.argv[2])
+    
+    # Extract MP3 filenames from TSV
+    valid_mp3s = set()
+    with open(tsv_file, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        next(reader)  # Skip header
+        for row in reader:
+            if len(row) > 1:
+                path = row[1]
+                if path:
+                    valid_mp3s.add(os.path.basename(path))
+    
+    print(f"Found {len(valid_mp3s)} valid MP3 filenames in TSV")
+    
+    # Find and delete MP3 files not in the TSV
+    deleted_count = 0
+    for mp3_file in clips_dir.glob("*.mp3"):
+        if mp3_file.name not in valid_mp3s:
+            mp3_file.unlink()
+            deleted_count += 1
+            if deleted_count % 100 == 0:
+                print(f"Deleted {deleted_count} files so far...")
+    
+    print(f"Deleted {deleted_count} MP3 files not referenced in the TSV")
+    
+    # Count remaining MP3 files
+    remaining_count = len(list(clips_dir.glob("*.mp3")))
+    print(f"Remaining MP3 files in clips directory: {remaining_count}")
+
+if __name__ == "__main__":
+    main()
+EOL
+        
+        chmod +x delete_unused_mp3s.py
+        
+        # Run the script to delete unused MP3 files
+        echo "Deleting MP3 files not referenced in the TSV..."
+        python delete_unused_mp3s.py "$merge_into_dir/en/custom_validated.tsv" "$merge_into_dir/en/clips"
+        
+        # Verify again
+        mp3_count=$(find "$merge_into_dir/en/clips" -name "*.mp3" | wc -l)
+        echo "MP3 files in target clips directory after cleanup: $mp3_count"
+    fi
+fi
