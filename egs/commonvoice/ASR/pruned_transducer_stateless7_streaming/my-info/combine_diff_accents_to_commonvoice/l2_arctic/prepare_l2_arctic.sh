@@ -99,10 +99,16 @@ else
   # Set download options based on arguments
   download_options=""
   if [ ! -z "$total_hours" ]; then
-    download_options="--total-hours $total_hours"
+    download_options="$download_options --total-hours $total_hours"
+  fi
+  
+  if [ "$use_cn_accented_only" = true ]; then
+    download_options="$download_options --use-cn-only"
+    echo "Will only use Chinese-accented speakers"
   fi
   
   # Execute download script
+  echo "Running: python download_l2_arctic_ds_from_official_site.py --output-dir \"$output_dir\" $download_options"
   python download_l2_arctic_ds_from_official_site.py --output-dir "$output_dir" $download_options
   
   # Check if download was successful and the output directory has content

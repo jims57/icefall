@@ -436,13 +436,14 @@ def process_with_hour_limit(temp_dir, output_dir, total_hours):
             print(f"Fallback copying also failed: {copy_error}")
             return False
 
-def download_l2_arctic_dataset(output_dir, total_hours=None):
+def download_l2_arctic_dataset(output_dir, total_hours=None, use_cn_only=False):
     """
     Download the L2-Arctic dataset from HuggingFace.
     
     Args:
         output_dir: Directory to save the dataset
         total_hours: Maximum total hours of audio to include (None for no limit)
+        use_cn_only: Only download Chinese-accented speakers if True
     """
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
@@ -451,17 +452,32 @@ def download_l2_arctic_dataset(output_dir, total_hours=None):
     downloads_dir = os.path.join(output_dir, "_downloads")
     os.makedirs(downloads_dir, exist_ok=True)
     
-    # Download metadata files
-    metadata_files = ["LICENSE", "PROMPTS", "README.md", "README.pdf"]
-    for file in metadata_files:
-        download_file(f"{HF_BASE_URL}{file}", os.path.join(downloads_dir, file), f"{file}")
+    # Define Chinese-accented speakers
+    chinese_speakers = ["BWC", "LXC", "NCC", "TXHC"]
     
-    # List of speaker ZIPs
-    speakers = [
+    # List of all speaker ZIPs
+    all_speakers = [
         "ABA", "ASI", "BWC", "EBVS", "ERMS", "HQTV", "HKK", "MBMPS", 
         "NJS", "PNV", "SVBI", "THV", "TNI", "TXHC", "YDCK", "YKWK",
         "ZHAA", "LXC", "NCC", "SVBI", "YBAA"
     ]
+    
+    # Filter and prioritize speakers based on Chinese-only flag
+    if use_cn_only:
+        print("Chinese-accented speakers only mode activated")
+        # Only use Chinese speakers
+        speakers = [s for s in all_speakers if s in chinese_speakers]
+        print(f"Will download only these Chinese-accented speakers: {speakers}")
+    else:
+        # If we're not in Chinese-only mode but still have a total_hours limit,
+        # prioritize Chinese speakers at the beginning of the list
+        if total_hours is not None:
+            # Move Chinese speakers to the front of the list
+            non_chinese = [s for s in all_speakers if s not in chinese_speakers]
+            speakers = chinese_speakers + non_chinese
+            print(f"Prioritizing Chinese-accented speakers: {chinese_speakers}")
+        else:
+            speakers = all_speakers
     
     if total_hours is not None:
         print(f"Downloading L2-Arctic dataset with {total_hours} hour limit...")
@@ -499,9 +515,9 @@ def download_l2_arctic_dataset(output_dir, total_hours=None):
                     estimated_total_hours += 1
                     print(f"  Using fallback estimate. Current total: {estimated_total_hours:.2f} hours")
     else:
-        print(f"Downloading full L2-Arctic dataset...")
+        print(f"Downloading L2-Arctic dataset...")
         
-        # Download all speakers
+        # Download all filtered speakers
         for speaker in speakers:
             zip_file = f"{speaker}.zip"
             local_path = os.path.join(downloads_dir, zip_file)
@@ -532,9 +548,14 @@ def main():
         default=None,
         help="Maximum total hours of audio to include (default: no limit)"
     )
+    parser.add_argument(
+        "--use-cn-only",
+        action="store_true",
+        help="Only download Chinese-accented speakers"
+    )
     args = parser.parse_args()
     
-    download_l2_arctic_dataset(args.output_dir, args.total_hours)
+    download_l2_arctic_dataset(args.output_dir, args.total_hours, args.use_cn_only)
 
 if __name__ == "__main__":
     main()
