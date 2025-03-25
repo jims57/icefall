@@ -131,7 +131,7 @@ else
 fi
 
 # When using Chinese accented only option, check if required speakers exist
-cn_speakers=("BWC" "LXC" "NCC" "TXHC" "ZHAA" "HKK" "YDCK" "YKWK")  # Added all potentially Chinese speakers
+cn_speakers=("BWC" "LXC" "NCC" "TXHC")  # Defined Chinese speakers
 cn_found=false
 
 if [ "$use_cn_accented_only" = true ]; then
@@ -161,9 +161,6 @@ mkdir -p "en/clips"
 # Create TSV file
 echo -e "client_id\tpath\tsentence\tup_votes\tdown_votes\tage\tgender\taccent\tlocale\tsegment" > en/custom_validated.tsv
 
-# Process WAV files, create MP3 files, and update TSV
-echo "Converting WAV files to MP3 and creating the TSV file..."
-
 # Get list of speakers to process
 if [ "$use_cn_accented_only" = true ]; then
   # Use only the Chinese speakers that were actually found
@@ -189,122 +186,161 @@ if [ ${#speakers[@]} -eq 0 ]; then
 fi
 
 echo "Processing speakers: ${speakers[*]}"
-tsv_entry_count=0
 
-for speaker in "${speakers[@]}"; do
-  speaker_dir="$output_dir/$speaker"
-  if [ ! -d "$speaker_dir" ]; then
-    echo "Warning: Speaker directory $speaker_dir not found, skipping"
-    continue
-  fi
-  
-  wav_dir="$speaker_dir/wav"
-  if [ ! -d "$wav_dir" ]; then
-    echo "Warning: WAV directory $wav_dir not found, checking for alternative structure"
-    # Try to find WAV files in other locations
-    wav_files=$(find "$speaker_dir" -name "*.wav")
-    if [ -z "$wav_files" ]; then
-      echo "Warning: No WAV files found for speaker $speaker, skipping"
-      continue
-    fi
-    # Use the directory containing WAV files
-    wav_dir=$(dirname "$(echo "$wav_files" | head -1)")
-    echo "Found WAV files in $wav_dir"
-  fi
-  
-  # Get txt files directory
-  txt_dir="$speaker_dir/txt"
-  if [ ! -d "$txt_dir" ]; then
-    echo "Warning: TXT directory $txt_dir not found, checking for alternative structure"
-    
-    # Try common alternative locations
-    for alt_dir in "$speaker_dir/transcript" "$speaker_dir/transcripts" "$speaker_dir/annotation" "$speaker_dir/annotations" "$speaker_dir/text"; do
-      if [ -d "$alt_dir" ]; then
-        txt_dir="$alt_dir"
-        echo "Found alternative text directory: $txt_dir"
-        break
-      fi
-    done
-    
-    # If still not found, try to find TXT files in other locations
-    if [ ! -d "$txt_dir" ]; then
-      txt_files=$(find "$speaker_dir" -name "*.txt" -o -name "*.lab" -o -name "*.trans.txt")
-      if [ -z "$txt_files" ]; then
-        echo "Warning: No TXT files found for speaker $speaker, trying to continue with WAV files only"
-        # Create a simple loop to process WAV files without transcriptions
-        for wav_file in "$wav_dir"/*.wav; do
-          if [ -f "$wav_file" ]; then
-            # Get the basename without extension
-            basename=$(basename "$wav_file" .wav)
-            # Create MP3 filename
-            mp3_filename="${speaker}_${basename}.mp3"
-            # Convert WAV to MP3
-            ffmpeg -hide_banner -loglevel error -i "$wav_file" -ar 32000 -ac 1 -b:a 48k "en/clips/$mp3_filename"
-            echo "Processed: $(basename "$wav_file") -> $mp3_filename"
-            # Add to TSV with empty transcription
-            echo -e "${speaker}\tclips/$mp3_filename\t\t1\t0\t\t\t${speaker}\ten\t" >> en/custom_validated.tsv
-            ((tsv_entry_count++))
-          fi
-        done
-        continue
-      fi
-      # Use the directory containing TXT files
-      txt_dir=$(dirname "$(echo "$txt_files" | head -1)")
-      echo "Found TXT files in $txt_dir"
-    fi
-  fi
-  
-  # Process WAV files with transcriptions
-  for wav_file in "$wav_dir"/*.wav; do
-    if [ -f "$wav_file" ]; then
-      # Get the basename without extension
-      basename=$(basename "$wav_file" .wav)
-      
-      # Get corresponding TXT file - search in multiple potential locations
-      txt_file=""
-      for ext in ".txt" ".lab" ".trans.txt"; do
-        for search_dir in "$txt_dir" "$speaker_dir/transcript" "$speaker_dir/transcripts" "$speaker_dir/annotation" "$speaker_dir/annotations" "$speaker_dir/text" "$speaker_dir"; do
-          potential_file="$search_dir/$basename$ext"
-          if [ -f "$potential_file" ]; then
-            txt_file="$potential_file"
-            break 2
-          fi
-        done
-      done
-      
-      # Get transcription
-      if [ -n "$txt_file" ] && [ -f "$txt_file" ]; then
-        # Read the text, remove any double quotes, and strip leading/trailing whitespace
-        text=$(cat "$txt_file" | tr -d '"' | xargs)
-      else
-        echo "Warning: No transcription found for $basename.wav, using empty text"
-        text=""
-      fi
-      
-      # Create MP3 filename
-      mp3_filename="${speaker}_${basename}.mp3"
-      
-      # Convert WAV to MP3
-      ffmpeg -hide_banner -loglevel error -i "$wav_file" -ar 32000 -ac 1 -b:a 48k "en/clips/$mp3_filename"
-      echo "Processed: $(basename "$wav_file") -> $mp3_filename"
-      
-      # Add to TSV
-      echo -e "${speaker}\tclips/$mp3_filename\t$text\t1\t0\t\t\t${speaker}\ten\t" >> en/custom_validated.tsv
-      ((tsv_entry_count++))
-    fi
-  done
-done
+# Create a Python script to handle the conversion more reliably
+cat > convert_wavs_to_mp3.py << 'EOL'
+#!/usr/bin/env python3
+import os
+import sys
+import subprocess
+import glob
+from pathlib import Path
+import re
 
-echo "Added $tsv_entry_count entries to en/custom_validated.tsv"
+def sanitize_text(text):
+    """Sanitize transcript text to avoid special character issues."""
+    # Replace problematic characters
+    text = text.replace('"', ' ').replace("'", " ")
+    # Remove non-printable characters and normalize whitespace
+    text = re.sub(r'[^\x20-\x7E\s]', '', text)
+    return text.strip()
+
+def find_transcript(wav_file, speaker_dir, txt_dir=None):
+    """Find the transcript for a WAV file."""
+    # Get the basename without extension
+    basename = os.path.basename(wav_file)[:-4]  # Remove .wav
+    
+    # Try exact match in txt_dir if provided
+    if txt_dir:
+        for ext in [".txt", ".lab", ".trans.txt"]:
+            potential_file = os.path.join(txt_dir, basename + ext)
+            if os.path.isfile(potential_file):
+                with open(potential_file, 'r', errors='replace') as f:
+                    return sanitize_text(f.read())
+    
+    # Try to find transcript file anywhere in speaker directory
+    for ext in [".txt", ".lab", ".trans.txt"]:
+        # Use glob to find matching files (case insensitive)
+        pattern = os.path.join(speaker_dir, "**", f"*{basename}*{ext}")
+        matches = glob.glob(pattern, recursive=True)
+        if matches:
+            with open(matches[0], 'r', errors='replace') as f:
+                return sanitize_text(f.read())
+    
+    # If no transcript found
+    return ""
+
+def process_speaker(speaker, speaker_dir, clips_dir, tsv_file):
+    """Process all WAV files for a single speaker."""
+    # Find transcript directory
+    txt_dir = None
+    for potential_dir in ["txt", "transcript", "transcripts", "annotation", "annotations", "text"]:
+        potential_path = os.path.join(speaker_dir, potential_dir)
+        if os.path.isdir(potential_path):
+            txt_dir = potential_path
+            print(f"Found transcript directory: {txt_dir}")
+            break
+    
+    # Find all WAV files
+    wav_files = glob.glob(os.path.join(speaker_dir, "**", "*.wav"), recursive=True)
+    total_files = len(wav_files)
+    print(f"Found {total_files} WAV files for speaker {speaker}")
+    
+    # Process each WAV file
+    processed = 0
+    for wav_file in wav_files:
+        # Get basename without extension
+        basename = os.path.basename(wav_file)[:-4]
+        
+        # Create MP3 filename
+        mp3_filename = f"{speaker}_{basename}.mp3"
+        mp3_path = os.path.join(clips_dir, mp3_filename)
+        
+        # Get transcript
+        transcript = find_transcript(wav_file, speaker_dir, txt_dir)
+        
+        # Convert WAV to MP3
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", wav_file, "-ar", "32000", "-ac", "1", "-b:a", "48k", mp3_path
+        ]
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Error converting {wav_file}: {e}")
+            continue
+        
+        # Add to TSV
+        with open(tsv_file, 'a', encoding='utf-8') as f:
+            f.write(f"{speaker}\tclips/{mp3_filename}\t{transcript}\t1\t0\t\t\t{speaker}\ten\t\n")
+        
+        # Update progress
+        processed += 1
+        if processed % 20 == 0 or processed == total_files:
+            print(f"Speaker {speaker}: Processed {processed}/{total_files} files")
+    
+    print(f"COMPLETED: Speaker {speaker} - processed {processed} files")
+    return processed
+
+def main():
+    if len(sys.argv) < 4:
+        print("Usage: python convert_wavs_to_mp3.py <output_dir> <speakers> <tsv_file>")
+        sys.exit(1)
+    
+    output_dir = sys.argv[1]
+    speakers = sys.argv[2].split(',')
+    tsv_file = sys.argv[3]
+    clips_dir = os.path.dirname(tsv_file) + "/clips"
+    
+    # Make sure clips directory exists
+    os.makedirs(clips_dir, exist_ok=True)
+    
+    # Process each speaker
+    total_processed = 0
+    for speaker in speakers:
+        speaker_dir = os.path.join(output_dir, speaker)
+        if not os.path.isdir(speaker_dir):
+            print(f"Warning: Speaker directory {speaker_dir} not found, skipping")
+            continue
+        
+        processed = process_speaker(speaker, speaker_dir, clips_dir, tsv_file)
+        total_processed += processed
+    
+    # Verify final counts
+    mp3_count = len(glob.glob(os.path.join(clips_dir, "*.mp3")))
+    tsv_count = sum(1 for _ in open(tsv_file, 'r')) - 1  # Subtract header
+    
+    print(f"\nConversion complete.")
+    print(f"Total files processed: {total_processed}")
+    print(f"MP3 files in {clips_dir}: {mp3_count}")
+    print(f"Entries in TSV file: {tsv_count}")
+    
+    if mp3_count != tsv_count:
+        print(f"WARNING: MP3 count ({mp3_count}) doesn't match TSV entry count ({tsv_count})")
+
+if __name__ == "__main__":
+    main()
+EOL
+
+# Make the script executable
+chmod +x convert_wavs_to_mp3.py
+
+# Run the Python script to convert WAV files to MP3
+echo "Converting WAV files to MP3 and creating the TSV file..."
+python convert_wavs_to_mp3.py "$output_dir" "$(IFS=,; echo "${speakers[*]}")" "$(pwd)/en/custom_validated.tsv"
+
+# Verify the TSV file
+tsv_lines=$(wc -l < en/custom_validated.tsv)
+tsv_count=$((tsv_lines - 1))  # Subtract header line
+echo "Verified TSV has $tsv_count entries (excluding header)."
 
 # Count MP3 files in clips directory for verification
 mp3_count=$(find "en/clips" -name "*.mp3" | wc -l)
 echo "MP3 files in en/clips: $mp3_count"
-echo "TSV entries: $tsv_entry_count"
 
 # Verify that MP3 count matches TSV entry count
-if [ "$mp3_count" -ne "$tsv_entry_count" ]; then
-  echo "Warning: MP3 count ($mp3_count) does not match TSV entry count ($tsv_entry_count)"
+if [ "$mp3_count" -ne "$tsv_count" ]; then
+  echo "Warning: MP3 count ($mp3_count) does not match TSV entry count ($tsv_count)"
   echo "Cleaning up orphaned MP3 files..."
   
   # Create a script to clean up orphaned MP3 files
@@ -404,6 +440,17 @@ if [ ! -z "$merge_into_dir" ]; then
     if [ "$tsv_entry_count" -ne "$expected_total" ]; then
       echo "Warning: Merged TSV count ($tsv_entry_count) doesn't match expected total ($expected_total)"
     fi
+  else
+    # If target TSV doesn't exist, copy our files
+    echo "Target custom_validated.tsv doesn't exist, copying files..."
+    cp "en/custom_validated.tsv" "$merge_into_dir/en/"
+    cp "en/clips"/*.mp3 "$merge_into_dir/en/clips/"
+  fi
+  
+  echo "Merge complete!"
+fi
+
+echo "All processing completed successfully!"
     
     if [ "$mp3_count" -ne "$tsv_entry_count" ]; then
       echo "Warning: Mismatch between MP3 count ($mp3_count) and TSV entry count ($tsv_entry_count)"
@@ -466,8 +513,7 @@ EOL
       # Verify again
       mp3_count=$(find "$merge_into_dir/en/clips" -name "*.mp3" | wc -l)
       echo "MP3 files in target clips directory after cleanup: $mp3_count"
-    fi
-  else
+    else
     # If target TSV doesn't exist, simply copy the files
     echo "Target custom_validated.tsv does not exist, copying all files..."
     cp "en/custom_validated.tsv" "$merge_into_dir/en/"
