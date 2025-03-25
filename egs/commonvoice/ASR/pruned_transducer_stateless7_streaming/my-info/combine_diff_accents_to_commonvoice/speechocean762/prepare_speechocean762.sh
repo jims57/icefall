@@ -340,20 +340,224 @@ EOL
                 source_tsv="custom_validated.tsv"
             fi
             
-            # Copy MP3 files instead of moving them
-            find clips -name "*.mp3" -exec cp {} "$merge_into_dir/en/clips/" \;
+            # Keep MP3 files in ~/icefall/egs/commonvoice/ASR/download/speechocean762-1.2.0/clips
+            # and also copy them to the merge directory
+            mkdir -p ~/icefall/egs/commonvoice/ASR/download/speechocean762-1.2.0/clips
+            
+            # Create a Python script to ensure all MP3 files in the TSV are copied
+            cat > copy_mp3_files.py << 'EOL'
+#!/usr/bin/env python3
+import argparse
+import csv
+import os
+import shutil
+import sys
+
+def main():
+    parser = argparse.ArgumentParser(description="Copy MP3 files based on TSV entries")
+    parser.add_argument("--tsv", type=str, required=True, help="TSV file with audio paths")
+    parser.add_argument("--source-dir", type=str, required=True, help="Source directory containing MP3 files")
+    parser.add_argument("--target-dir", type=str, required=True, help="Target directory to copy MP3 files to")
+    args = parser.parse_args()
+    
+    # Expand home directory if path contains ~
+    tsv_path = os.path.expanduser(args.tsv)
+    source_dir = os.path.expanduser(args.source_dir)
+    target_dir = os.path.expanduser(args.target_dir)
+    
+    # Ensure target directory exists
+    os.makedirs(target_dir, exist_ok=True)
+    
+    # Read TSV file to get all MP3 filenames
+    mp3_files = []
+    with open(tsv_path, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        next(reader)  # Skip header
+        for row in reader:
+            if len(row) > 1 and row[1]:  # Check if path column exists and is not empty
+                mp3_file = os.path.basename(row[1])
+                if mp3_file.endswith('.mp3'):
+                    mp3_files.append(mp3_file)
+    
+    print(f"Found {len(mp3_files)} MP3 files in TSV")
+    
+    # Find all MP3 files in source directory
+    source_mp3_files = []
+    for root, dirs, files in os.walk(source_dir):
+        for file in files:
+            if file.endswith('.mp3'):
+                source_mp3_files.append((os.path.join(root, file), file))
+    
+    print(f"Found {len(source_mp3_files)} MP3 files in source directory")
+    
+    # Copy MP3 files to target directory
+    copied_count = 0
+    missing_count = 0
+    for mp3_file in mp3_files:
+        found = False
+        for source_path, source_file in source_mp3_files:
+            if source_file == mp3_file:
+                target_path = os.path.join(target_dir, mp3_file)
+                if not os.path.exists(target_path):
+                    shutil.copy2(source_path, target_path)
+                    copied_count += 1
+                found = True
+                break
+        
+        if not found:
+            print(f"Warning: Could not find {mp3_file} in source directory", file=sys.stderr)
+            missing_count += 1
+    
+    print(f"Copied {copied_count} MP3 files to {target_dir}")
+    if missing_count > 0:
+        print(f"Warning: {missing_count} MP3 files from TSV were not found in source directory", file=sys.stderr)
+    
+    # Verify the number of MP3 files in target directory
+    target_mp3_count = len([f for f in os.listdir(target_dir) if f.endswith('.mp3')])
+    print(f"Target directory now contains {target_mp3_count} MP3 files")
+    
+    if target_mp3_count != len(mp3_files):
+        print(f"Warning: Mismatch between TSV entries ({len(mp3_files)}) and MP3 files in target ({target_mp3_count})", file=sys.stderr)
+
+if __name__ == "__main__":
+    main()
+EOL
+            
+            # Make script executable
+            chmod +x copy_mp3_files.py
+            
+            # Find all possible source directories for MP3 files
+            possible_sources=("clips" "en/clips" "$merge_into_dir/en/clips")
+            
+            # Copy MP3 files to both target directories
+            echo "Copying MP3 files to ~/icefall/egs/commonvoice/ASR/download/speechocean762-1.2.0/clips..."
+            python copy_mp3_files.py --tsv="$source_tsv" --source-dir="." --target-dir=~/icefall/egs/commonvoice/ASR/download/speechocean762-1.2.0/clips
+            
+            # Also copy to merge directory
+            echo "Copying MP3 files to $merge_into_dir/en/clips..."
+            mkdir -p "$merge_into_dir/en/clips"
+            python copy_mp3_files.py --tsv="$source_tsv" --source-dir="." --target-dir="$merge_into_dir/en/clips"
             
             # Make a copy of the source TSV to keep locally
             cp "$source_tsv" "custom_validated.tsv.backup"
             
+            # Merge TSV files
             python merge_tsv_files.py --source="$source_tsv" --target="$merge_into_dir/en/custom_validated.tsv" --output="$merge_into_dir/en/custom_validated.tsv.new"
             mv "$merge_into_dir/en/custom_validated.tsv.new" "$merge_into_dir/en/custom_validated.tsv"
             
-            # Restore the backup to ensure local file has the same data
-            mv "custom_validated.tsv.backup" "custom_validated.tsv"
+            # Also append the new entries to the source TSV
+            echo "Updating local custom_validated.tsv with the same new entries..."
+            python merge_tsv_files.py --source="$merge_into_dir/en/custom_validated.tsv" --target="$source_tsv" --output="custom_validated.tsv.new"
+            mv "custom_validated.tsv.new" "custom_validated.tsv"
             
-            echo "Data successfully merged into $merge_into_dir"
-            echo "Local processing complete. When using merge mode, local 'en' directory is not created to save space."
+            # Copy the final TSV to the speechocean762-1.2.0 directory
+            cp "custom_validated.tsv" ~/icefall/egs/commonvoice/ASR/download/speechocean762-1.2.0/
+            
+            echo "Data successfully merged into $merge_into_dir and local custom_validated.tsv updated"
+            
+            # Verify the MP3 files match the TSV entries in the speechocean762-1.2.0 directory
+            echo "Verifying MP3 files in ~/icefall/egs/commonvoice/ASR/download/speechocean762-1.2.0/clips..."
+            tsv_count=$(tail -n +2 ~/icefall/egs/commonvoice/ASR/download/speechocean762-1.2.0/custom_validated.tsv 2>/dev/null | wc -l || echo 0)
+            mp3_count=$(find ~/icefall/egs/commonvoice/ASR/download/speechocean762-1.2.0/clips -name "*.mp3" 2>/dev/null | wc -l || echo 0)
+            echo "TSV entries: $tsv_count, MP3 files: $mp3_count"
+            
+            if [ "$tsv_count" != "$mp3_count" ] && [ "$tsv_count" -gt 0 ]; then
+                echo "Warning: Mismatch between TSV entries and MP3 files in speechocean762-1.2.0 directory"
+                echo "Running additional sync to ensure all files are present..."
+                
+                # Create a fixed path version of the Python script
+                cat > fix_path_copy_mp3_files.py << 'EOL'
+#!/usr/bin/env python3
+import argparse
+import csv
+import os
+import shutil
+import sys
+
+def main():
+    parser = argparse.ArgumentParser(description="Copy MP3 files based on TSV entries")
+    parser.add_argument("--tsv", type=str, required=True, help="TSV file with audio paths")
+    parser.add_argument("--source-dir", type=str, required=True, help="Source directory containing MP3 files")
+    parser.add_argument("--target-dir", type=str, required=True, help="Target directory to copy MP3 files to")
+    args = parser.parse_args()
+    
+    # Expand home directory if path contains ~
+    tsv_path = os.path.expanduser(args.tsv)
+    source_dir = os.path.expanduser(args.source_dir)
+    target_dir = os.path.expanduser(args.target_dir)
+    
+    # Ensure target directory exists
+    os.makedirs(target_dir, exist_ok=True)
+    
+    # Read TSV file to get all MP3 filenames
+    mp3_files = []
+    with open(tsv_path, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        next(reader)  # Skip header
+        for row in reader:
+            if len(row) > 1 and row[1]:  # Check if path column exists and is not empty
+                mp3_file = os.path.basename(row[1])
+                if mp3_file.endswith('.mp3'):
+                    mp3_files.append(mp3_file)
+    
+    print(f"Found {len(mp3_files)} MP3 files in TSV")
+    
+    # Find all MP3 files in source directory
+    source_mp3_files = []
+    for root, dirs, files in os.walk(source_dir):
+        for file in files:
+            if file.endswith('.mp3'):
+                source_mp3_files.append((os.path.join(root, file), file))
+    
+    print(f"Found {len(source_mp3_files)} MP3 files in source directory")
+    
+    # Copy MP3 files to target directory
+    copied_count = 0
+    missing_count = 0
+    for mp3_file in mp3_files:
+        found = False
+        for source_path, source_file in source_mp3_files:
+            if source_file == mp3_file:
+                target_path = os.path.join(target_dir, mp3_file)
+                if not os.path.exists(target_path):
+                    shutil.copy2(source_path, target_path)
+                    copied_count += 1
+                found = True
+                break
+        
+        if not found:
+            print(f"Warning: Could not find {mp3_file} in source directory", file=sys.stderr)
+            missing_count += 1
+    
+    print(f"Copied {copied_count} MP3 files to {target_dir}")
+    if missing_count > 0:
+        print(f"Warning: {missing_count} MP3 files from TSV were not found in source directory", file=sys.stderr)
+    
+    # Verify the number of MP3 files in target directory
+    target_mp3_count = len([f for f in os.listdir(target_dir) if f.endswith('.mp3')])
+    print(f"Target directory now contains {target_mp3_count} MP3 files")
+    
+    if target_mp3_count != len(mp3_files):
+        print(f"Warning: Mismatch between TSV entries ({len(mp3_files)}) and MP3 files in target ({target_mp3_count})", file=sys.stderr)
+
+if __name__ == "__main__":
+    main()
+EOL
+                
+                # Make script executable
+                chmod +x fix_path_copy_mp3_files.py
+                
+                # Use absolute paths instead of ~ paths
+                speechocean_dir="${HOME}/icefall/egs/commonvoice/ASR/download/speechocean762-1.2.0"
+                
+                # Try one more time with all possible source directories
+                for src_dir in "${possible_sources[@]}"; do
+                    if [ -d "$src_dir" ]; then
+                        echo "Trying to copy from $src_dir..."
+                        python fix_path_copy_mp3_files.py --tsv="${speechocean_dir}/custom_validated.tsv" --source-dir="$src_dir" --target-dir="${speechocean_dir}/clips"
+                    fi
+                done
+            fi
             
             # Skip creating local en directory when merging
             if [ -n "$merge_into_dir" ]; then
