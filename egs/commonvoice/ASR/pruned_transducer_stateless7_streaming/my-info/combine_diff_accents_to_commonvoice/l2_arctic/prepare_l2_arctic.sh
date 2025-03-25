@@ -264,7 +264,8 @@ def process_speaker(speaker, speaker_dir, clips_dir, tsv_file):
         # Get transcript
         transcript = find_transcript(wav_file, speaker_dir, txt_dir)
         
-        # Generate a unique sentence_id using uuid
+        # Generate UUIDs for client_id and sentence_id
+        client_id = str(uuid.uuid4()).replace('-', '')
         sentence_id = str(uuid.uuid4()).replace('-', '')
         
         # Skip if MP3 already exists
@@ -272,7 +273,7 @@ def process_speaker(speaker, speaker_dir, clips_dir, tsv_file):
             # Add to TSV if not already there
             with open(tsv_file, 'a', encoding='utf-8') as f:
                 # Format: client_id path sentence_id sentence sentence_domain up_votes down_votes age gender accents variant locale segment
-                f.write(f"{speaker}\tclips/{mp3_filename}\t{sentence_id}\t{transcript}\t\t1\t0\t\t\t{speaker}\t\ten\t\n")
+                f.write(f"{client_id}\tclips/{mp3_filename}\t{sentence_id}\t{transcript}\t\t1\t0\t\t\t{speaker}\t\ten\t\n")
             
             processed += 1
             if processed % 20 == 0 or processed == total_files:
@@ -293,7 +294,7 @@ def process_speaker(speaker, speaker_dir, clips_dir, tsv_file):
         # Add to TSV
         with open(tsv_file, 'a', encoding='utf-8') as f:
             # Format: client_id path sentence_id sentence sentence_domain up_votes down_votes age gender accents variant locale segment
-            f.write(f"{speaker}\tclips/{mp3_filename}\t{sentence_id}\t{transcript}\t\t1\t0\t\t\t{speaker}\t\ten\t\n")
+            f.write(f"{client_id}\tclips/{mp3_filename}\t{sentence_id}\t{transcript}\t\t1\t0\t\t\t{speaker}\t\ten\t\n")
         
         # Update progress
         processed += 1
@@ -429,21 +430,70 @@ if [ ! -z "$merge_into_dir" ]; then
     echo "Source TSV entries to add: $source_count"
     echo "Expected total after merging: $expected_total"
     
-    # Preserve the header
-    head -n 1 "$merge_into_dir/en/custom_validated.tsv" > "${merge_into_dir}/en/temp_header.tsv"
+    # Create a Python script to handle the merging with proper UUID generation
+    cat > merge_tsv_files.py << 'EOL'
+#!/usr/bin/env python3
+import os
+import sys
+import csv
+import uuid
+
+def merge_tsv_files(target_file, source_file, output_file):
+    """Merge two TSV files, ensuring all entries have UUID client_ids."""
     
-    # Concatenate all entries (excluding headers)
-    tail -n +2 "$merge_into_dir/en/custom_validated.tsv" > "${merge_into_dir}/en/temp_existing.tsv"
-    tail -n +2 "en/custom_validated.tsv" > "${merge_into_dir}/en/temp_new.tsv"
+    # Read the header from the target file
+    with open(target_file, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        header = next(reader)
+        
+        # Write header to output file
+        with open(output_file, 'w', encoding='utf-8') as out:
+            writer = csv.writer(out, delimiter='\t')
+            writer.writerow(header)
     
-    # Create a new file with header + all entries
-    cat "${merge_into_dir}/en/temp_header.tsv" "${merge_into_dir}/en/temp_existing.tsv" "${merge_into_dir}/en/temp_new.tsv" > "${merge_into_dir}/en/merged.tsv"
+    # Copy existing entries from target file
+    with open(target_file, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        next(reader)  # Skip header
+        
+        with open(output_file, 'a', encoding='utf-8') as out:
+            writer = csv.writer(out, delimiter='\t')
+            for row in reader:
+                writer.writerow(row)
+    
+    # Add entries from source file with UUID client_ids
+    with open(source_file, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        next(reader)  # Skip header
+        
+        with open(output_file, 'a', encoding='utf-8') as out:
+            writer = csv.writer(out, delimiter='\t')
+            for row in reader:
+                # Ensure client_id is a UUID
+                if not len(row[0]) == 64:  # Standard UUID without hyphens is 32 chars, but example shows 64
+                    row[0] = str(uuid.uuid4()).replace('-', '') + str(uuid.uuid4()).replace('-', '')
+                writer.writerow(row)
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        print("Usage: python merge_tsv_files.py <target_file> <source_file> <output_file>")
+        sys.exit(1)
+    
+    target_file = sys.argv[1]
+    source_file = sys.argv[2]
+    output_file = sys.argv[3]
+    
+    merge_tsv_files(target_file, source_file, output_file)
+    print(f"Merged TSV files successfully to {output_file}")
+EOL
+    
+    chmod +x merge_tsv_files.py
+    
+    # Merge the files
+    python merge_tsv_files.py "$merge_into_dir/en/custom_validated.tsv" "en/custom_validated.tsv" "$merge_into_dir/en/merged.tsv"
     
     # Replace the target file with the merged file
-    mv "${merge_into_dir}/en/merged.tsv" "$merge_into_dir/en/custom_validated.tsv"
-    
-    # Clean up temporary files
-    rm -f "${merge_into_dir}/en/temp_header.tsv" "${merge_into_dir}/en/temp_existing.tsv" "${merge_into_dir}/en/temp_new.tsv"
+    mv "$merge_into_dir/en/merged.tsv" "$merge_into_dir/en/custom_validated.tsv"
     
     # Copy MP3 files
     echo "Copying MP3 files to target clips directory..."
