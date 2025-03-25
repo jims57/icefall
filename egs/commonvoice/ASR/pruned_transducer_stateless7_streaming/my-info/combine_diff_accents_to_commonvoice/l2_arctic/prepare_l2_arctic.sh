@@ -26,6 +26,9 @@
 # Download to a specific directory:
 # bash prepare_l2_arctic.sh --output-dir /path/to/custom/directory
 #
+# Limit total hours of audio:
+# bash prepare_l2_arctic.sh --total-hours 1.5
+#
 # Use only Chinese-accented speakers:
 # bash prepare_l2_arctic.sh --use-cn-accented-only
 #
@@ -52,6 +55,7 @@ set -e  # Exit on error
 output_dir="./l2_arctic_data"
 use_cn_accented_only=false
 merge_into_dir=""
+total_hours=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -65,6 +69,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --merge-into-dir)
       merge_into_dir="$2"
+      shift 2
+      ;;
+    --total-hours)
+      total_hours="$2"
       shift 2
       ;;
     *)
@@ -118,7 +126,11 @@ if [ ! -d "$output_dir" ]; then
 
   # Run the download script
   echo "Starting L2-Arctic dataset download and extraction..."
-  python3 "$download_script" --output-dir "$output_dir"
+  if [ -n "$total_hours" ]; then
+    python3 "$download_script" --output-dir "$output_dir" --total-hours "$total_hours"
+  else
+    python3 "$download_script" --output-dir "$output_dir"
+  fi
 
   # Check if download was successful
   if [ $? -ne 0 ]; then

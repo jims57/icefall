@@ -1,0 +1,3 @@
+# please add a new param called --total-hours, which is the total hours of the dataset you want to download when running sh file.
+# when downloading the dataset, you should count each audio duration in seconds, and then sum them up to get the total hours.
+# Maybe these audios are zip files, the download can only download one zip file as a whole, which may cause the downloaded audios duration is larger than the total-hours you set, in this case, you should delete the extra audios(delete from newly to older ones).
