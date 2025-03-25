@@ -268,6 +268,27 @@ if [ $stage -le 7 ] && [ $stop_stage -ge 7 ]; then
   fi
 fi
 
+if [ $stage -le 70 ] && [ $stop_stage -ge 70 ]; then
+  log "Stage 70: Use custom combine_cuts.py script instead of lhotse combine"
+  
+  if [ ! -f data/${lang}/fbank/cv-${lang}_cuts_train.jsonl.gz ]; then
+    pieces=$(find data/${lang}/fbank/cv-${lang}_train_split_${num_splits} -name "cv-${lang}_cuts_train.*.jsonl.gz")
+    ./combine_cuts.py $pieces data/${lang}/fbank/cv-${lang}_cuts_train.jsonl.gz
+  fi
+
+  if [ $use_validated = true ] && [ -f data/${lang}/fbank/.cv-${lang}_validated.done ]; then
+    log "Also combine features for validated data using custom script"
+    pieces=$(find data/${lang}/fbank/cv-${lang}_validated_split_${num_splits} -name "cv-${lang}_cuts_validated.*.jsonl.gz")
+    ./combine_cuts.py $pieces data/${lang}/fbank/cv-${lang}_cuts_validated.jsonl.gz
+  fi
+
+  if [ $use_invalidated = true ] && [ -f data/${lang}/fbank/.cv-${lang}_invalidated.done ]; then
+    log "Also combine features for invalidated data using custom script"
+    pieces=$(find data/${lang}/fbank/cv-${lang}_invalidated_split_${num_splits} -name "cv-${lang}_cuts_invalidated.*.jsonl.gz")
+    ./combine_cuts.py $pieces data/${lang}/fbank/cv-${lang}_cuts_invalidated.jsonl.gz
+  fi
+fi
+
 if [ $stage -le 8 ] && [ $stop_stage -ge 8 ]; then
   log "Stage 8: Compute fbank for musan"
   mkdir -p data/fbank
