@@ -259,6 +259,17 @@ def process_speaker(speaker, speaker_dir, clips_dir, tsv_file):
         # Get transcript
         transcript = find_transcript(wav_file, speaker_dir, txt_dir)
         
+        # Skip if MP3 already exists
+        if os.path.exists(mp3_path):
+            # Add to TSV if not already there
+            with open(tsv_file, 'a', encoding='utf-8') as f:
+                f.write(f"{speaker}\tclips/{mp3_filename}\t{transcript}\t1\t0\t\t\t{speaker}\ten\t\n")
+            
+            processed += 1
+            if processed % 20 == 0 or processed == total_files:
+                print(f"Speaker {speaker}: Processed {processed}/{total_files} files")
+            continue
+        
         # Convert WAV to MP3
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
@@ -451,76 +462,3 @@ if [ ! -z "$merge_into_dir" ]; then
 fi
 
 echo "All processing completed successfully!"
-    
-    if [ "$mp3_count" -ne "$tsv_entry_count" ]; then
-      echo "Warning: Mismatch between MP3 count ($mp3_count) and TSV entry count ($tsv_entry_count)"
-      echo "Cleaning up orphaned MP3 files in target directory..."
-      
-      # Create a script to delete MP3 files not in the TSV
-      cat > delete_unused_mp3s.py << 'EOL'
-#!/usr/bin/env python3
-import os
-import sys
-import csv
-from pathlib import Path
-
-def main():
-    if len(sys.argv) != 3:
-        print("Usage: python delete_unused_mp3s.py <tsv_file> <clips_dir>")
-        sys.exit(1)
-    
-    tsv_file = sys.argv[1]
-    clips_dir = Path(sys.argv[2])
-    
-    # Extract MP3 filenames from TSV
-    valid_mp3s = set()
-    with open(tsv_file, 'r', encoding='utf-8') as f:
-        reader = csv.reader(f, delimiter='\t')
-        next(reader)  # Skip header
-        for row in reader:
-            if len(row) > 1:
-                path = row[1]
-                if path:
-                    valid_mp3s.add(os.path.basename(path))
-    
-    print(f"Found {len(valid_mp3s)} valid MP3 filenames in TSV")
-    
-    # Find and delete MP3 files not in the TSV
-    deleted_count = 0
-    for mp3_file in clips_dir.glob("*.mp3"):
-        if mp3_file.name not in valid_mp3s:
-            mp3_file.unlink()
-            deleted_count += 1
-            if deleted_count % 100 == 0:
-                print(f"Deleted {deleted_count} files so far...")
-    
-    print(f"Deleted {deleted_count} MP3 files not referenced in the TSV")
-    
-    # Count remaining MP3 files
-    remaining_count = len(list(clips_dir.glob("*.mp3")))
-    print(f"Remaining MP3 files in clips directory: {remaining_count}")
-
-if __name__ == "__main__":
-    main()
-EOL
-      
-      chmod +x delete_unused_mp3s.py
-      
-      # Run the script to delete unused MP3 files
-      echo "Deleting MP3 files not referenced in the TSV..."
-      python delete_unused_mp3s.py "$merge_into_dir/en/custom_validated.tsv" "$merge_into_dir/en/clips"
-      
-      # Verify again
-      mp3_count=$(find "$merge_into_dir/en/clips" -name "*.mp3" | wc -l)
-      echo "MP3 files in target clips directory after cleanup: $mp3_count"
-    else
-    # If target TSV doesn't exist, simply copy the files
-    echo "Target custom_validated.tsv does not exist, copying all files..."
-    cp "en/custom_validated.tsv" "$merge_into_dir/en/"
-    cp "en/clips"/*.mp3 "$merge_into_dir/en/clips/"
-  fi
-  
-  echo "Merge completed."
-fi
-
-echo "L2-Arctic dataset preparation complete."
