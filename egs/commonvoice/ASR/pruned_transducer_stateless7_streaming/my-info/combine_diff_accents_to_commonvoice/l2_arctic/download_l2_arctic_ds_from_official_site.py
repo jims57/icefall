@@ -16,500 +16,502 @@
 # limitations under the License.
 
 """
-This script downloads the L2-Arctic dataset from a Google Drive link.
-See email for all download link: https://mail.google.com/mail/u/0/#spam/FMfcgzQZTprJQcWWxpxcDgNVbchkVTsw
-Designed to work on Ubuntu server or any standard Python environment.
+This script downloads the L2-Arctic dataset from the official sources or mirrors.
+It ensures both audio (WAV) files and transcript files are properly downloaded.
 """
 
 import os
-import zipfile
-import tarfile
-import subprocess
+import sys
 import argparse
-import shutil
+import zipfile
 import tempfile
-from pathlib import Path
-import time
+import shutil
+import traceback
+import requests
+from tqdm import tqdm
+import json
+import librosa
+import glob
+import re
 
-def install_requirements():
-    """
-    Install required packages using pip.
-    """
-    try:
-        import tqdm
-    except ImportError:
-        print("Installing tqdm...")
-        subprocess.check_call(["pip", "install", "tqdm"])
-    
-    try:
-        import requests
-    except ImportError:
-        print("Installing requests...")
-        subprocess.check_call(["pip", "install", "requests"])
-    
-    try:
-        import librosa
-    except ImportError:
-        print("Installing librosa for audio duration calculation...")
-        subprocess.check_call(["pip", "install", "librosa"])
+# Base URL for HuggingFace downloads
+HF_BASE_URL = "https://huggingface.co/jims57/l2_arctic_dataset/resolve/main/main/"
 
-def download_from_huggingface(file_name, output_path, repo_id="jims57/l2_arctic_dataset", repo_type="model", revision="main"):
+# Alternative sources for transcripts
+TRANSCRIPT_SOURCES = {
+    "github": "https://raw.githubusercontent.com/ku-nlp/l2-arctic/master/transcriptions/{speaker}.txt",
+    "arctic": "http://www.festvox.org/cmu_arctic/cmuarctic.data"
+}
+
+def download_file(url, local_path, desc=None):
     """
-    Download a file from Hugging Face repository
+    Download a file from a URL to a local path with progress bar.
     
     Args:
-        file_name: The file name to download
-        output_path: Local path to save the file
-        repo_id: The Hugging Face repository ID
-        repo_type: The repository type (model, dataset, etc.)
-        revision: The branch name
+        url: URL to download from
+        local_path: Local path to save to
+        desc: Description for progress bar
+        
+    Returns:
+        True if download was successful, False otherwise
     """
-    import requests
-    from tqdm import tqdm
-    
-    # URL for the file
-    url = f"https://huggingface.co/{repo_id}/resolve/{revision}/main/{file_name}"
-    
-    print(f"Downloading {file_name} from Hugging Face to {output_path}...")
-    
-    # Send a GET request to the URL
-    response = requests.get(url, stream=True)
-    
-    # Check if the request was successful
-    if response.status_code == 200:
-        # Get the total file size
+    try:
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        
+        # Start download
+        response = requests.get(url, stream=True)
+        if response.status_code != 200:
+            print(f"Failed to download {url}. Status code: {response.status_code}")
+            return False
+        
+        # Get file size for progress bar
         total_size = int(response.headers.get('content-length', 0))
         
-        # Create a progress bar
-        progress_bar = tqdm(total=total_size, unit='B', unit_scale=True)
+        # Download with progress bar
+        with open(local_path, 'wb') as f:
+            with tqdm(total=total_size, unit='B', unit_scale=True, desc=desc or os.path.basename(url)) as pbar:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        pbar.update(len(chunk))
         
-        # Write the content to the output file
-        with open(output_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=1024):
-                if chunk:
-                    f.write(chunk)
-                    progress_bar.update(len(chunk))
-        
-        progress_bar.close()
         return True
-    else:
-        print(f"Failed to download {file_name}. Status code: {response.status_code}")
+    except Exception as e:
+        print(f"Error downloading {url}: {e}")
         return False
 
-def get_audio_duration(file_path):
+def get_audio_duration(audio_path):
     """
     Get the duration of an audio file in seconds.
     
     Args:
-        file_path: Path to the audio file
-    
+        audio_path: Path to the audio file
+        
     Returns:
-        Duration in seconds or 0 if file can't be processed
+        Duration in seconds
     """
     try:
-        import librosa
-        duration = librosa.get_duration(path=file_path)
+        duration = librosa.get_duration(path=audio_path)
         return duration
     except Exception as e:
-        print(f"Warning: Could not get duration for {file_path}: {e}")
-        return 0
+        print(f"Warning: Could not get duration for {audio_path}: {e}")
+        return 0  # Return 0 for duration calculation failures
 
-def extract_archive_with_limit(archive_dir, output_dir, total_hours_limit=None):
+def download_cmu_arctic_transcripts(output_dir):
     """
-    Extract all speaker zip files from a directory to the specified directory,
-    with an optional limit on total audio duration.
+    Download and parse the original CMU Arctic transcriptions.
+    These are the base transcriptions used in L2-Arctic.
     
     Args:
-        archive_dir: Directory containing the zip files
-        output_dir: Directory to extract files to
-        total_hours_limit: Maximum total hours of audio to include (None for no limit)
+        output_dir: Directory to save transcripts to
+        
+    Returns:
+        Dictionary mapping utterance IDs to transcripts
+    """
+    try:
+        transcript_file = os.path.join(output_dir, "_downloads", "cmuarctic.data")
+        os.makedirs(os.path.dirname(transcript_file), exist_ok=True)
+        
+        # Download if not already downloaded
+        if not os.path.exists(transcript_file):
+            print("Downloading CMU Arctic transcriptions...")
+            download_file(TRANSCRIPT_SOURCES["arctic"], transcript_file, "CMU Arctic transcriptions")
+        
+        # Parse the transcript file
+        transcripts = {}
+        with open(transcript_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                parts = line.strip().split(' ', 2)
+                if len(parts) >= 3:
+                    # Extract utterance ID and text (removing quotes)
+                    utterance_id = parts[1].strip('()')
+                    text = parts[2].strip('"')
+                    transcripts[utterance_id] = text
+        
+        print(f"Loaded {len(transcripts)} CMU Arctic transcriptions")
+        return transcripts
+    except Exception as e:
+        print(f"Error downloading CMU Arctic transcripts: {e}")
+        return {}
+
+def create_transcript_files(transcripts, speaker_dir):
+    """
+    Create individual transcript files for each WAV file.
     
+    Args:
+        transcripts: Dictionary mapping utterance IDs to transcripts
+        speaker_dir: Directory containing speaker data
+        
+    Returns:
+        Number of transcript files created
+    """
+    try:
+        # Create transcript directory if it doesn't exist
+        transcript_dir = os.path.join(speaker_dir, "txt")
+        os.makedirs(transcript_dir, exist_ok=True)
+        
+        # Find all WAV files
+        wav_dir = os.path.join(speaker_dir, "wav")
+        if not os.path.exists(wav_dir):
+            print(f"Warning: WAV directory not found for {os.path.basename(speaker_dir)}")
+            return 0
+        
+        wav_files = glob.glob(os.path.join(wav_dir, "*.wav"))
+        count = 0
+        
+        # Create transcript files
+        for wav_file in wav_files:
+            basename = os.path.splitext(os.path.basename(wav_file))[0]
+            # Extract utterance ID (e.g., "arctic_a0001" from "speaker_arctic_a0001.wav")
+            match = re.search(r'(arctic_[a-z][0-9]+)', basename)
+            utterance_id = match.group(1) if match else basename
+            
+            if utterance_id in transcripts:
+                # Create transcript file
+                txt_file = os.path.join(transcript_dir, f"{basename}.txt")
+                with open(txt_file, 'w', encoding='utf-8') as f:
+                    f.write(transcripts[utterance_id])
+                count += 1
+        
+        print(f"Created {count} transcript files for {os.path.basename(speaker_dir)}")
+        return count
+    except Exception as e:
+        print(f"Error creating transcript files: {e}")
+        return 0
+
+def extract_archive_with_limit(archive_dir, output_dir, total_hours=None):
+    """
+    Extract all archives from a directory with an optional limit on total audio duration.
+    
+    Args:
+        archive_dir: Directory containing all the ZIP archives
+        output_dir: Directory to extract the archives to
+        total_hours: Maximum total hours of audio to include (None for no limit)
+        
     Returns:
         True if extraction was successful, False otherwise
     """
-    print(f"Extracting files from {archive_dir} to {output_dir}...")
-    
-    # Create output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Find all zip files
-    zip_files = [f for f in os.listdir(archive_dir) if f.endswith('.zip') and not f == "suitcase_corpus.zip"]
-    
-    if not zip_files:
-        print(f"No zip files found in {archive_dir}")
-        return False
-    
-    # Create a temporary directory for extraction if we have a total hours limit
-    if total_hours_limit is not None:
-        temp_dir = tempfile.mkdtemp(prefix="l2arctic_temp_")
-        print(f"Using temporary directory for extraction with hours limit: {temp_dir}")
-    else:
-        temp_dir = None
-    
     try:
-        # If no hour limit is set, extract each zip to the output directory
-        if total_hours_limit is None:
-            for zip_file in zip_files:
-                zip_path = os.path.join(archive_dir, zip_file)
-                speaker_id = os.path.splitext(zip_file)[0]
-                speaker_dir = os.path.join(output_dir, speaker_id)
-                
-                # Create speaker directory
-                os.makedirs(speaker_dir, exist_ok=True)
-                
-                print(f"Extracting {zip_path} to {speaker_dir}...")
-                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                    zip_ref.extractall(speaker_dir)
-            
-            # Copy non-zip files to the output directory
-            for f in os.listdir(archive_dir):
-                if f.endswith('.zip'):
-                    continue
-                    
-                src_path = os.path.join(archive_dir, f)
-                dst_path = os.path.join(output_dir, f)
-                
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Create a temporary directory for extraction
+        temp_dir = None
+        if total_hours is not None:
+            temp_dir = tempfile.mkdtemp(prefix="l2arctic_temp_")
+            print(f"Created temporary directory for extraction: {temp_dir}")
+        
+        # Get all ZIP files in the archive directory
+        zip_files = [f for f in os.listdir(archive_dir) if f.lower().endswith('.zip')]
+        zip_files.sort()  # Ensure consistent order
+        
+        # First, copy non-ZIP files directly to output directory
+        for file in os.listdir(archive_dir):
+            if not file.lower().endswith('.zip'):
+                src_path = os.path.join(archive_dir, file)
+                dst_path = os.path.join(output_dir, file)
                 if os.path.isfile(src_path):
                     shutil.copy2(src_path, dst_path)
-                    print(f"Copied {f} to {output_dir}")
-            
-            print(f"All files extracted without duration limits.")
-            return True
+                    print(f"Copied metadata file: {file}")
         
-        # If we have a total_hours_limit, extract all zips to temp dir first
-        # and then copy files until the limit is reached
+        # Download CMU Arctic transcripts (for all speakers)
+        transcripts = download_cmu_arctic_transcripts(output_dir)
+        
+        # Process each ZIP file
         for zip_file in zip_files:
-            zip_path = os.path.join(archive_dir, zip_file)
-            speaker_id = os.path.splitext(zip_file)[0]
-            speaker_temp_dir = os.path.join(temp_dir, speaker_id)
-            
-            # Create speaker directory in temp
-            os.makedirs(speaker_temp_dir, exist_ok=True)
-            
-            print(f"Extracting {zip_path} to temporary directory...")
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(speaker_temp_dir)
-        
-        # Copy non-zip files to the temp directory
-        for f in os.listdir(archive_dir):
-            if f.endswith('.zip'):
+            # Skip 'suitcase_corpus.zip' as it's not part of the speaker files
+            if zip_file.lower() == 'suitcase_corpus.zip':
                 continue
                 
-            src_path = os.path.join(archive_dir, f)
-            dst_path = os.path.join(temp_dir, f)
+            zip_path = os.path.join(archive_dir, zip_file)
+            speaker_id = os.path.splitext(zip_file)[0]  # Get speaker ID from filename (e.g., "ABA" from "ABA.zip")
             
-            if os.path.isfile(src_path):
-                shutil.copy2(src_path, dst_path)
+            # Determine where to extract
+            target_dir = output_dir if total_hours is None else temp_dir
+            speaker_dir = os.path.join(target_dir, speaker_id)
+            os.makedirs(speaker_dir, exist_ok=True)
+            
+            print(f"Extracting {zip_file}...")
+            
+            # Extract to the speaker directory
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                # List all files in the ZIP
+                file_list = zip_ref.namelist()
+                if not file_list:
+                    continue
+                    
+                # Check for potential directory structures
+                speaker_prefix = f"{speaker_id}/"
+                has_speaker_dir = any(item.startswith(speaker_prefix) for item in file_list)
+                
+                # Extract all files
+                if has_speaker_dir:
+                    # The ZIP has a top-level directory matching the speaker name
+                    for item in file_list:
+                        if item.startswith(speaker_prefix):
+                            # Remove the speaker prefix from the path
+                            target_path = os.path.join(speaker_dir, item[len(speaker_prefix):])
+                            if item.endswith('/'):
+                                # Create directory
+                                os.makedirs(target_path, exist_ok=True)
+                            else:
+                                # Extract file
+                                try:
+                                    # Create parent directory if it doesn't exist
+                                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                                    # Extract the file content
+                                    with open(target_path, 'wb') as f:
+                                        f.write(zip_ref.read(item))
+                                except Exception as e:
+                                    print(f"Warning: Failed to extract {item}: {e}")
+                else:
+                    # The ZIP doesn't have a top-level speaker directory
+                    for item in file_list:
+                        target_path = os.path.join(speaker_dir, item)
+                        if item.endswith('/'):
+                            # Create directory
+                            os.makedirs(target_path, exist_ok=True)
+                        else:
+                            # Extract file
+                            try:
+                                # Create parent directory if it doesn't exist
+                                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                                # Extract the file content
+                                with open(target_path, 'wb') as f:
+                                    f.write(zip_ref.read(item))
+                            except Exception as e:
+                                print(f"Warning: Failed to extract {item}: {e}")
+            
+            # Create transcript files if needed
+            wav_dir = os.path.join(speaker_dir, "wav")
+            txt_dir = os.path.join(speaker_dir, "txt")
+            
+            if os.path.exists(wav_dir) and not os.path.exists(txt_dir) and transcripts:
+                create_transcript_files(transcripts, speaker_dir)
         
-        # Find all WAV files in the extracted archives
+        # If we're using a total_hours limit, process the extracted files
+        if total_hours is not None and temp_dir:
+            success = process_with_hour_limit(temp_dir, output_dir, total_hours)
+            
+            # Also create transcript files for the speakers in the output directory
+            # if they're missing after the hour-limited processing
+            for speaker_dir in [d for d in os.listdir(output_dir) if os.path.isdir(os.path.join(output_dir, d))]:
+                full_speaker_dir = os.path.join(output_dir, speaker_dir)
+                wav_dir = os.path.join(full_speaker_dir, "wav")
+                txt_dir = os.path.join(full_speaker_dir, "txt")
+                
+                if os.path.exists(wav_dir) and not os.path.exists(txt_dir) and transcripts:
+                    create_transcript_files(transcripts, full_speaker_dir)
+            
+            return success
+        
+        return True
+    except Exception as e:
+        print(f"Error during extraction: {e}")
+        traceback.print_exc()
+        return False
+
+def process_with_hour_limit(temp_dir, output_dir, total_hours):
+    """
+    Process files in the temporary directory and copy only enough to meet the hour limit.
+    
+    Args:
+        temp_dir: Temporary directory containing all extracted files
+        output_dir: Output directory to copy files to
+        total_hours: Maximum total hours of audio to include
+        
+    Returns:
+        True if processing was successful, False otherwise
+    """
+    try:
+        # Convert hours to seconds for comparison
+        total_seconds = total_hours * 3600
+        
+        # Find all WAV files in the temp directory
         wav_files = []
         for root, _, files in os.walk(temp_dir):
             for file in files:
                 if file.lower().endswith('.wav'):
                     wav_path = os.path.join(root, file)
-                    # Get file creation/modification time for sorting
-                    file_time = os.path.getmtime(wav_path)
-                    wav_files.append((wav_path, file_time))
+                    duration = get_audio_duration(wav_path)
+                    relative_path = os.path.relpath(wav_path, temp_dir)
+                    speaker = relative_path.split(os.path.sep)[0]
+                    wav_files.append((wav_path, relative_path, duration, speaker))
         
-        if not wav_files:
-            print("No WAV files found in the extracted archives")
-            return False
+        # Sort by duration (optional, could be random or by path instead)
+        wav_files.sort(key=lambda x: x[2])  # Sort by duration
         
-        # Sort WAV files by creation time (oldest first)
-        wav_files.sort(key=lambda x: x[1])
+        # Group files by speaker
+        files_by_speaker = {}
+        for wav_path, relative_path, duration, speaker in wav_files:
+            if speaker not in files_by_speaker:
+                files_by_speaker[speaker] = []
+            files_by_speaker[speaker].append((wav_path, relative_path, duration))
         
-        # Calculate total duration and copy files until limit
-        total_seconds = 0
-        seconds_limit = total_hours_limit * 3600
-        files_to_keep = []
+        # Select files up to the hour limit, ensuring we have files from all speakers
+        selected_files = []
+        current_total_duration = 0
         
-        for wav_path, _ in wav_files:
-            duration = get_audio_duration(wav_path)
+        # First, select some files from each speaker to ensure representation
+        files_per_speaker = 50  # Adjust as needed
+        for speaker, files in files_by_speaker.items():
+            for wav_path, relative_path, duration in files[:files_per_speaker]:
+                if current_total_duration >= total_seconds:
+                    break
+                selected_files.append((wav_path, relative_path))
+                current_total_duration += duration
+        
+        # Then add more files if we haven't reached the limit
+        if current_total_duration < total_seconds:
+            remaining_files = []
+            for files in files_by_speaker.values():
+                remaining_files.extend(files[files_per_speaker:])
             
-            # If adding this file would exceed the limit, stop
-            if total_seconds + duration > seconds_limit:
-                break
+            # Sort by duration
+            remaining_files.sort(key=lambda x: x[2])
             
-            # Add this file to the list of files to keep
-            files_to_keep.append(wav_path)
-            total_seconds += duration
+            # Add files up to the limit
+            for wav_path, relative_path, duration in remaining_files:
+                if current_total_duration >= total_seconds:
+                    break
+                selected_files.append((wav_path, relative_path))
+                current_total_duration += duration
         
-        print(f"Selected {len(files_to_keep)} WAV files with total duration of {total_seconds/3600:.2f} hours")
+        print(f"Selected {len(selected_files)} files with total duration of {current_total_duration/3600:.2f} hours")
         
-        if len(files_to_keep) == 0:
-            print("Warning: No audio files were selected. Check if the hour limit is too low.")
-            return False
-        
-        # Create a mapping of files to copy with their relative paths
-        relative_paths = {}
-        speaker_dirs = {}
-        
-        # First determine which speakers to include
-        for wav_path in files_to_keep:
-            rel_path = os.path.relpath(wav_path, temp_dir)
-            speaker_id = rel_path.split(os.sep)[0]
-            speaker_dirs[speaker_id] = True
-        
-        # Copy all speaker directories with their structures but only selected audio files
-        for speaker_id in speaker_dirs:
-            # Create speaker directory in output
-            speaker_output_dir = os.path.join(output_dir, speaker_id)
-            speaker_temp_dir = os.path.join(temp_dir, speaker_id)
+        # Copy selected files to output directory, preserving directory structure
+        for wav_path, relative_path in selected_files:
+            # Determine output path
+            output_path = os.path.join(output_dir, relative_path)
             
-            # Copy directory structure
-            for root, dirs, files in os.walk(speaker_temp_dir):
-                rel_path = os.path.relpath(root, speaker_temp_dir)
-                target_dir = os.path.join(speaker_output_dir, rel_path)
-                os.makedirs(target_dir, exist_ok=True)
-                
-                # Copy non-WAV files (metadata, etc.)
-                for file in files:
-                    if not file.lower().endswith('.wav'):
-                        src_file = os.path.join(root, file)
-                        dst_file = os.path.join(target_dir, file)
-                        shutil.copy2(src_file, dst_file)
+            # Create output directory if it doesn't exist
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # Copy the file
+            shutil.copy2(wav_path, output_path)
         
-        # Now copy only the selected WAV files
-        for wav_path in files_to_keep:
-            rel_path = os.path.relpath(wav_path, temp_dir)
-            dst_path = os.path.join(output_dir, rel_path)
-            
-            # Create parent directories if needed
-            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-            
-            # Copy the WAV file
-            shutil.copy2(wav_path, dst_path)
-            
-            # Copy related files (transcripts, etc.)
-            wav_dir = os.path.dirname(wav_path)
-            wav_basename = os.path.splitext(os.path.basename(wav_path))[0]
-            for ext in ['.txt', '.lab', '.TextGrid', '.json']:
-                related_path = os.path.join(wav_dir, wav_basename + ext)
-                if os.path.exists(related_path):
-                    dst_related = os.path.join(os.path.dirname(dst_path), wav_basename + ext)
-                    shutil.copy2(related_path, dst_related)
+        # Create list of selected speakers
+        selected_speakers = set()
+        for _, relative_path in selected_files:
+            speaker = relative_path.split(os.path.sep)[0]
+            selected_speakers.add(speaker)
         
-        # Copy non-speaker files to the output directory
-        for item in os.listdir(temp_dir):
-            src_path = os.path.join(temp_dir, item)
+        # Copy related files for the selected speakers
+        for speaker in selected_speakers:
+            speaker_temp_dir = os.path.join(temp_dir, speaker)
+            speaker_output_dir = os.path.join(output_dir, speaker)
             
-            # Skip speaker directories
-            if os.path.isdir(src_path) and item in speaker_dirs:
-                continue
-                
-            dst_path = os.path.join(output_dir, item)
+            # Create speaker directory
+            os.makedirs(speaker_output_dir, exist_ok=True)
             
-            if os.path.isfile(src_path):
-                shutil.copy2(src_path, dst_path)
+            # Copy non-WAV directories (e.g., txt, transcript, etc.)
+            for item in os.listdir(speaker_temp_dir):
+                source_path = os.path.join(speaker_temp_dir, item)
+                if os.path.isdir(source_path) and item.lower() != "wav":
+                    # Copy the directory
+                    dest_path = os.path.join(speaker_output_dir, item)
+                    if not os.path.exists(dest_path):
+                        shutil.copytree(source_path, dest_path)
         
-        print(f"Final dataset size: {total_seconds/3600:.2f} hours ({len(files_to_keep)} files)")
+        print(f"Successfully processed and copied files to {output_dir}")
         return True
         
     except Exception as e:
-        print(f"Error during extraction with hour limit: {e}")
-        return False
-    finally:
-        # Clean up temporary directory if it was created
-        if temp_dir:
-            try:
-                shutil.rmtree(temp_dir)
-                print(f"Cleaned up temporary directory: {temp_dir}")
-            except Exception as e:
-                print(f"Error cleaning up temporary directory: {e}")
-
-def get_audio_durations_from_zip(zip_path, sample_size=10):
-    """
-    Estimate the total audio duration from a ZIP file by sampling a few audio files.
-    
-    Args:
-        zip_path: Path to the ZIP file
-        sample_size: Number of WAV files to sample
+        print(f"Error processing with hour limit: {e}")
+        traceback.print_exc()
         
-    Returns:
-        (estimated_total_duration, num_wav_files) or (0, 0) if estimation fails
-    """
-    try:
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            # Get all WAV files in the ZIP
-            wav_files = [f for f in zip_ref.namelist() if f.lower().endswith('.wav')]
-            num_wav_files = len(wav_files)
-            
-            if num_wav_files == 0:
-                return 0, 0
-                
-            # Use either all files or a sample
-            if num_wav_files <= sample_size:
-                files_to_sample = wav_files
-            else:
-                # Sample files evenly throughout the list
-                step = num_wav_files // sample_size
-                files_to_sample = wav_files[::step][:sample_size]
-            
-            # Create a temporary directory for extracting samples
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # Extract sample files
-                for wav_file in files_to_sample:
-                    zip_ref.extract(wav_file, temp_dir)
-                
-                # Calculate average duration
-                total_sample_duration = 0
-                for wav_file in files_to_sample:
-                    file_path = os.path.join(temp_dir, wav_file)
-                    duration = get_audio_duration(file_path)
-                    total_sample_duration += duration
-                
-                # Estimate total duration
-                avg_duration = total_sample_duration / len(files_to_sample)
-                estimated_total_duration = avg_duration * num_wav_files
-                
-                return estimated_total_duration, num_wav_files
-    except Exception as e:
-        print(f"Warning: Failed to estimate duration for {zip_path}: {e}")
-        return 0, 0
+        # In case of failure, try copying all files from temp to output
+        print("Trying to copy all files from temp directory as fallback...")
+        try:
+            for root, dirs, files in os.walk(temp_dir):
+                for file in files:
+                    src_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(src_path, temp_dir)
+                    dst_path = os.path.join(output_dir, rel_path)
+                    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+                    shutil.copy2(src_path, dst_path)
+            return True
+        except Exception as copy_error:
+            print(f"Fallback copying also failed: {copy_error}")
+            return False
 
-def download_l2_arctic_dataset(output_dir="./l2_arctic_data", total_hours=None):
+def download_l2_arctic_dataset(output_dir, total_hours=None):
     """
-    Download the L2-Arctic dataset from Hugging Face and extract it.
+    Download the L2-Arctic dataset from HuggingFace.
     
     Args:
-        output_dir: Directory to save the extracted dataset
+        output_dir: Directory to save the dataset
         total_hours: Maximum total hours of audio to include (None for no limit)
     """
-    # Create download directory to store the zip files
-    download_dir = os.path.join(output_dir, "_downloads")
-    os.makedirs(download_dir, exist_ok=True)
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
     
-    # Install required packages if needed
-    install_requirements()
+    # Create downloads directory
+    downloads_dir = os.path.join(output_dir, "_downloads")
+    os.makedirs(downloads_dir, exist_ok=True)
     
-    # Speaker ZIP files to download
-    speaker_zips = [
-        "ABA.zip", "ASI.zip", "BWC.zip", "EBVS.zip", "ERMS.zip", 
-        "HJK.zip", "HKK.zip", "HQTV.zip", "LXC.zip", "MBMPS.zip", 
-        "NCC.zip", "NJS.zip", "PNV.zip", "RRBI.zip", "SKA.zip", 
-        "SVBI.zip", "THV.zip", "TLV.zip", "TNI.zip", "TXHC.zip", 
-        "YBAA.zip", "YDCK.zip", "YKWK.zip", "ZHAA.zip"
+    # Download metadata files
+    metadata_files = ["LICENSE", "PROMPTS", "README.md", "README.pdf"]
+    for file in metadata_files:
+        download_file(f"{HF_BASE_URL}{file}", os.path.join(downloads_dir, file), f"{file}")
+    
+    # List of speaker ZIPs
+    speakers = [
+        "ABA", "ASI", "BWC", "EBVS", "ERMS", "HQTV", "HKK", "MBMPS", 
+        "NJS", "PNV", "SVBI", "THV", "TNI", "TXHC", "YDCK", "YKWK",
+        "ZHAA", "LXC", "NCC", "SVBI", "YBAA"
     ]
     
-    # Sort speaker ZIPs to ensure consistent ordering across runs
-    speaker_zips.sort()
-    
-    # Additional metadata files to download
-    metadata_files = ["LICENSE", "PROMPTS", "README.md", "README.pdf"]
-    
-    # Download metadata files first, as they are small
-    for meta_file in metadata_files:
-        output_path = os.path.join(download_dir, meta_file)
-        if os.path.exists(output_path):
-            print(f"{meta_file} already exists, skipping download")
-            continue
-        
-        download_from_huggingface(meta_file, output_path)
-        # Metadata files are optional, so we don't track failures
-    
-    downloaded_files = []
-    failed_files = []
-    
-    # If total_hours is set, download and check ZIPs one by one
     if total_hours is not None:
         print(f"Downloading L2-Arctic dataset with {total_hours} hour limit...")
-        total_seconds_limit = total_hours * 3600
-        estimated_total_seconds = 0
         
-        # Add a safety margin to ensure we have enough data
-        safety_margin = 0.2  # 20% extra data
-        target_seconds = total_seconds_limit * (1 + safety_margin)
+        # Initialize tracking
+        downloaded_speakers = []
+        estimated_total_hours = 0
         
-        for zip_file in speaker_zips:
-            output_path = os.path.join(download_dir, zip_file)
-            
-            # Check if ZIP already exists
-            if os.path.exists(output_path):
-                print(f"{zip_file} already exists, checking duration...")
-                estimated_duration, wav_count = get_audio_durations_from_zip(output_path)
-                if estimated_duration > 0:
-                    estimated_total_seconds += estimated_duration
-                    downloaded_files.append(zip_file)
-                    print(f"  Estimated {wav_count} files, {estimated_duration/3600:.2f} hours")
-                else:
-                    print(f"  Could not estimate duration, assuming ZIP is needed")
-                    downloaded_files.append(zip_file)
-            else:
-                # Download the ZIP
-                success = download_from_huggingface(zip_file, output_path)
-                if success:
-                    downloaded_files.append(zip_file)
-                    estimated_duration, wav_count = get_audio_durations_from_zip(output_path)
-                    estimated_total_seconds += estimated_duration
-                    print(f"  Estimated {wav_count} files, {estimated_duration/3600:.2f} hours")
-                else:
-                    failed_files.append(zip_file)
-            
-            # Report progress
-            print(f"Current estimated total: {estimated_total_seconds/3600:.2f} hours")
-            
-            # If we've reached our target with a safety margin, stop downloading
-            if estimated_total_seconds >= target_seconds:
-                print(f"Reached estimated target duration ({estimated_total_seconds/3600:.2f} hours), stopping download")
+        # Download speakers and track estimated hours until we reach the limit
+        for speaker in speakers:
+            # Check if we've reached the limit
+            if estimated_total_hours >= total_hours:
+                print(f"Reached estimated target duration ({estimated_total_hours:.2f} hours), stopping download")
                 break
-    else:
-        # Download all ZIP files if no hour limit
-        print(f"Downloading full L2-Arctic dataset from Hugging Face repository...")
-        
-        for zip_file in speaker_zips:
-            output_path = os.path.join(download_dir, zip_file)
-            if os.path.exists(output_path):
-                print(f"{zip_file} already exists, skipping download")
-                downloaded_files.append(zip_file)
-                continue
             
-            success = download_from_huggingface(zip_file, output_path)
-            if success:
-                downloaded_files.append(zip_file)
-            else:
-                failed_files.append(zip_file)
-    
-    # Check if any speaker ZIPs were downloaded
-    if not downloaded_files:
-        print("Failed to download any speaker files. Aborting.")
-        return
-    
-    if failed_files:
-        print(f"Warning: Failed to download {len(failed_files)} files: {', '.join(failed_files)}")
-    
-    # Extract the dataset with optional hour limit
-    extraction_successful = extract_archive_with_limit(download_dir, output_dir, total_hours)
-    
-    if extraction_successful:
-        print(f"\nDataset downloaded and extracted to {output_dir}")
-        
-        # List the contents of the dataset
-        print("\nDataset contents:")
-        file_count = 0
-        wav_count = 0
-        total_duration = 0
-        
-        for path in Path(output_dir).rglob("*"):
-            if path.is_file():
-                if path.suffix == '.wav':
-                    wav_count += 1
-                    duration = get_audio_duration(str(path))
-                    total_duration += duration
+            # Download this speaker
+            zip_file = f"{speaker}.zip"
+            local_path = os.path.join(downloads_dir, zip_file)
+            
+            if download_file(f"{HF_BASE_URL}{zip_file}", local_path, f"{zip_file}"):
+                downloaded_speakers.append(speaker)
                 
-                # Only show a limited number of files
-                if file_count < 20:
-                    print(f"  {path.relative_to(output_dir)}")
-                    file_count += 1
-                    if file_count == 20:
-                        print("  ... (more files not shown)")
-        
-        print(f"\nTotal WAV files: {wav_count}")
-        print(f"Total audio duration: {total_duration/3600:.2f} hours")
-        
-        if total_hours is not None:
-            print(f"Requested duration limit: {total_hours:.2f} hours")
+                # Estimate hours based on file count (rough approximation)
+                try:
+                    with zipfile.ZipFile(local_path, 'r') as zip_ref:
+                        file_count = len([f for f in zip_ref.namelist() if f.lower().endswith('.wav')])
+                        # Rough estimate: 3-4 seconds per file
+                        estimated_hours = file_count * 3.5 / 3600
+                        print(f"  Estimated {file_count} files, {estimated_hours:.2f} hours")
+                        estimated_total_hours += estimated_hours
+                        print(f"Current estimated total: {estimated_total_hours:.2f} hours")
+                except Exception as e:
+                    print(f"  Warning: Couldn't estimate duration for {zip_file}: {e}")
+                    # Use a fallback estimate of 1 hour per speaker
+                    estimated_total_hours += 1
+                    print(f"  Using fallback estimate. Current total: {estimated_total_hours:.2f} hours")
     else:
-        print("\nExtraction failed.")
+        print(f"Downloading full L2-Arctic dataset...")
+        
+        # Download all speakers
+        for speaker in speakers:
+            zip_file = f"{speaker}.zip"
+            local_path = os.path.join(downloads_dir, zip_file)
+            download_file(f"{HF_BASE_URL}{zip_file}", local_path, f"{zip_file}")
+    
+    # Extract the downloaded archives
+    if extract_archive_with_limit(downloads_dir, output_dir, total_hours):
+        print(f"L2-Arctic dataset downloaded and extracted to {output_dir}")
+    else:
+        print("Extraction failed.")
         print("Please download the dataset manually from the HuggingFace repository:")
         print("https://huggingface.co/jims57/l2_arctic_dataset/tree/main/main")
 
