@@ -1,0 +1,4 @@
+#!/bin/bash
+
+# Reset the dataset by removing current files and restoring from backup copies
+rm -rf ~/icefall/egs/commonvoice/ASR/download/concise-cv-ds-by-jimmy-1/en/custom_validated.tsv ~/icefall/egs/commonvoice/ASR/download/concise-cv-ds-by-jimmy-1/en/clips && cp -r ~/icefall/egs/commonvoice/ASR/download/concise-cv-ds-by-jimmy-1/en/clips-Copy1 ~/icefall/egs/commonvoice/ASR/download/concise-cv-ds-by-jimmy-1/en/clips && cp ~/icefall/egs/commonvoice/ASR/download/concise-cv-ds-by-jimmy-1/en/custom_validated-Copy1.tsv ~/icefall/egs/commonvoice/ASR/download/concise-cv-ds-by-jimmy-1/en/custom_validated.tsv && rm -rf ~/.local/share/Trash/*

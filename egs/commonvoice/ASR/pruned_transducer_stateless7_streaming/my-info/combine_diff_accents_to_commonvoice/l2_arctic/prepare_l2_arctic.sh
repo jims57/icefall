@@ -159,7 +159,7 @@ fi
 mkdir -p "en/clips"
 
 # Create TSV file
-echo -e "client_id\tpath\tsentence\tup_votes\tdown_votes\tage\tgender\taccent\tlocale\tsegment" > en/custom_validated.tsv
+echo -e "client_id\tpath\tsentence_id\tsentence\tsentence_domain\tup_votes\tdown_votes\tage\tgender\taccents\tvariant\tlocale\tsegment" > en/custom_validated.tsv
 
 # Get list of speakers to process
 if [ "$use_cn_accented_only" = true ]; then
@@ -196,9 +196,14 @@ import subprocess
 import glob
 from pathlib import Path
 import re
+import uuid
 
 def sanitize_text(text):
     """Sanitize transcript text to avoid special character issues."""
+    # Remove trailing parenthesis and dot if present
+    text = re.sub(r'\s*\.\)\s*$', '', text)
+    text = re.sub(r'\s*\)\s*$', '', text)
+    
     # Replace problematic characters
     text = text.replace('"', ' ').replace("'", " ")
     # Remove non-printable characters and normalize whitespace
@@ -259,11 +264,14 @@ def process_speaker(speaker, speaker_dir, clips_dir, tsv_file):
         # Get transcript
         transcript = find_transcript(wav_file, speaker_dir, txt_dir)
         
+        # Generate a unique sentence_id using uuid
+        sentence_id = str(uuid.uuid4()).replace('-', '')
+        
         # Skip if MP3 already exists
         if os.path.exists(mp3_path):
             # Add to TSV if not already there
             with open(tsv_file, 'a', encoding='utf-8') as f:
-                f.write(f"{speaker}\tclips/{mp3_filename}\t{transcript}\t1\t0\t\t\t{speaker}\ten\t\n")
+                f.write(f"{speaker}\tclips/{mp3_filename}\t{sentence_id}\t{transcript}\t\t1\t0\t\t\t{speaker}\t\ten\t\n")
             
             processed += 1
             if processed % 20 == 0 or processed == total_files:
@@ -283,7 +291,7 @@ def process_speaker(speaker, speaker_dir, clips_dir, tsv_file):
         
         # Add to TSV
         with open(tsv_file, 'a', encoding='utf-8') as f:
-            f.write(f"{speaker}\tclips/{mp3_filename}\t{transcript}\t1\t0\t\t\t{speaker}\ten\t\n")
+            f.write(f"{speaker}\tclips/{mp3_filename}\t{sentence_id}\t{transcript}\t\t1\t0\t\t\t{speaker}\t\ten\t\n")
         
         # Update progress
         processed += 1
