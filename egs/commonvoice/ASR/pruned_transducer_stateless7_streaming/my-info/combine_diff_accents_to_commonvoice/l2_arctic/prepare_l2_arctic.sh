@@ -271,6 +271,7 @@ def process_speaker(speaker, speaker_dir, clips_dir, tsv_file):
         if os.path.exists(mp3_path):
             # Add to TSV if not already there
             with open(tsv_file, 'a', encoding='utf-8') as f:
+                # Format: client_id path sentence_id sentence sentence_domain up_votes down_votes age gender accents variant locale segment
                 f.write(f"{speaker}\tclips/{mp3_filename}\t{sentence_id}\t{transcript}\t\t1\t0\t\t\t{speaker}\t\ten\t\n")
             
             processed += 1
@@ -291,6 +292,7 @@ def process_speaker(speaker, speaker_dir, clips_dir, tsv_file):
         
         # Add to TSV
         with open(tsv_file, 'a', encoding='utf-8') as f:
+            # Format: client_id path sentence_id sentence sentence_domain up_votes down_votes age gender accents variant locale segment
             f.write(f"{speaker}\tclips/{mp3_filename}\t{sentence_id}\t{transcript}\t\t1\t0\t\t\t{speaker}\t\ten\t\n")
         
         # Update progress
