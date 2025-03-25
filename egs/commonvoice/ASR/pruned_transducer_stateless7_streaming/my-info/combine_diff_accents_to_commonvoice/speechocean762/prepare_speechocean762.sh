@@ -330,17 +330,27 @@ EOL
             elif [ -f "en/custom_validated.tsv" ]; then
                 source_tsv="en/custom_validated.tsv"
             else
-                echo "Error: Could not find source TSV file to merge"
-                exit 1
+                # If no TSV file is found, create a custom_validated.tsv with the correct format
+                echo "No source TSV file found. Creating custom_validated.tsv with correct format..."
+                echo -e "client_id\tpath\tsentence_id\tsentence\tsentence_domain\tup_votes\tdown_votes\tage\tgender\taccents\tvariant\tlocale\tsegment" > custom_validated.tsv
+                
+                # Generate TSV content from MP3 files
+                python convert_speechocean762_to_cv_ds_format.py --skip_audio_conversion --output_tsv="custom_validated.tsv" --rebuild_tsv
+                
+                source_tsv="custom_validated.tsv"
             fi
+            
+            # Copy MP3 files instead of moving them
+            find clips -name "*.mp3" -exec cp {} "$merge_into_dir/en/clips/" \;
+            
+            # Make a copy of the source TSV to keep locally
+            cp "$source_tsv" "custom_validated.tsv.backup"
             
             python merge_tsv_files.py --source="$source_tsv" --target="$merge_into_dir/en/custom_validated.tsv" --output="$merge_into_dir/en/custom_validated.tsv.new"
             mv "$merge_into_dir/en/custom_validated.tsv.new" "$merge_into_dir/en/custom_validated.tsv"
             
-            # Clean up temporary files
-            if [ -f "temp_generated.tsv" ]; then
-                rm temp_generated.tsv
-            fi
+            # Restore the backup to ensure local file has the same data
+            mv "custom_validated.tsv.backup" "custom_validated.tsv"
             
             echo "Data successfully merged into $merge_into_dir"
             echo "Local processing complete. When using merge mode, local 'en' directory is not created to save space."
