@@ -40,10 +40,9 @@
 # 2. Checks if the download script exists
 # 3. Runs the download script to fetch the L2-Arctic dataset
 # 4. The download script will:
-#    - Install required packages (gdown, tqdm)
-#    - Download the dataset from Google Drive
+#    - Install required packages (requests, tqdm, librosa)
+#    - Download the dataset from Hugging Face
 #    - Extract the dataset to the specified directory
-#    - Remove the downloaded archive file
 # 5. If --use-cn-accented-only is specified, only extracts Chinese-accented speakers
 # 6. Converts WAV files to MP3 format (32kHz, mono)
 # 7. Creates a custom_validated.tsv file in CommonVoice format
