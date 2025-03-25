@@ -234,24 +234,59 @@ def extract_archive_with_limit(archive_dir, output_dir, total_hours=None):
             
             print(f"Extracting {zip_file}...")
             
-            # Extract to the speaker directory
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                # List all files in the ZIP
-                file_list = zip_ref.namelist()
-                if not file_list:
-                    continue
+            # Verify the ZIP file integrity before extraction
+            try:
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    # Test the integrity of the ZIP file
+                    bad_file = zip_ref.testzip()
+                    if bad_file:
+                        print(f"Warning: ZIP file {zip_file} has a bad file: {bad_file}")
+                        # Try to redownload the ZIP file
+                        print(f"Attempting to redownload {zip_file}...")
+                        if download_file(f"{HF_BASE_URL}{zip_file}", zip_path, f"Redownloading {zip_file}"):
+                            print(f"Successfully redownloaded {zip_file}")
+                        else:
+                            print(f"Failed to redownload {zip_file}")
+                            continue
                     
-                # Check for potential directory structures
-                speaker_prefix = f"{speaker_id}/"
-                has_speaker_dir = any(item.startswith(speaker_prefix) for item in file_list)
-                
-                # Extract all files
-                if has_speaker_dir:
-                    # The ZIP has a top-level directory matching the speaker name
-                    for item in file_list:
-                        if item.startswith(speaker_prefix):
-                            # Remove the speaker prefix from the path
-                            target_path = os.path.join(speaker_dir, item[len(speaker_prefix):])
+                    # Count expected WAV files
+                    expected_wav_count = len([f for f in zip_ref.namelist() if f.lower().endswith('.wav')])
+                    print(f"ZIP file contains {expected_wav_count} WAV files")
+                    
+                    # List all files in the ZIP
+                    file_list = zip_ref.namelist()
+                    if not file_list:
+                        print(f"Warning: ZIP file {zip_file} is empty")
+                        continue
+                        
+                    # Check for potential directory structures
+                    speaker_prefix = f"{speaker_id}/"
+                    has_speaker_dir = any(item.startswith(speaker_prefix) for item in file_list)
+                    
+                    # Extract all files
+                    if has_speaker_dir:
+                        # The ZIP has a top-level directory matching the speaker name
+                        for item in file_list:
+                            if item.startswith(speaker_prefix):
+                                # Remove the speaker prefix from the path
+                                target_path = os.path.join(speaker_dir, item[len(speaker_prefix):])
+                                if item.endswith('/'):
+                                    # Create directory
+                                    os.makedirs(target_path, exist_ok=True)
+                                else:
+                                    # Extract file
+                                    try:
+                                        # Create parent directory if it doesn't exist
+                                        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                                        # Extract the file content
+                                        with open(target_path, 'wb') as f:
+                                            f.write(zip_ref.read(item))
+                                    except Exception as e:
+                                        print(f"Warning: Failed to extract {item}: {e}")
+                    else:
+                        # The ZIP doesn't have a top-level speaker directory
+                        for item in file_list:
+                            target_path = os.path.join(speaker_dir, item)
                             if item.endswith('/'):
                                 # Create directory
                                 os.makedirs(target_path, exist_ok=True)
@@ -265,23 +300,53 @@ def extract_archive_with_limit(archive_dir, output_dir, total_hours=None):
                                         f.write(zip_ref.read(item))
                                 except Exception as e:
                                     print(f"Warning: Failed to extract {item}: {e}")
+                    
+                    # Verify extraction by counting WAV files
+                    wav_dir = os.path.join(speaker_dir, "wav")
+                    if os.path.exists(wav_dir):
+                        extracted_wav_count = len(glob.glob(os.path.join(wav_dir, "*.wav")))
+                        print(f"Extracted {extracted_wav_count} WAV files to {wav_dir}")
+                        
+                        # Check if we're missing files
+                        if extracted_wav_count < expected_wav_count:
+                            print(f"Warning: Expected {expected_wav_count} WAV files but only extracted {extracted_wav_count}")
+                            
+                            # Try alternative extraction method if we're missing files
+                            if extracted_wav_count < expected_wav_count * 0.9:  # If we're missing more than 10%
+                                print(f"Trying alternative extraction method for {zip_file}...")
+                                # Extract to a temporary directory
+                                temp_extract_dir = tempfile.mkdtemp(prefix=f"{speaker_id}_temp_")
+                                shutil.unpack_archive(zip_path, temp_extract_dir)
+                                
+                                # Find all WAV files in the temp directory
+                                all_wavs = glob.glob(os.path.join(temp_extract_dir, "**", "*.wav"), recursive=True)
+                                print(f"Found {len(all_wavs)} WAV files using alternative extraction")
+                                
+                                # Copy WAV files to the target wav directory
+                                os.makedirs(wav_dir, exist_ok=True)
+                                for wav_file in all_wavs:
+                                    wav_name = os.path.basename(wav_file)
+                                    shutil.copy2(wav_file, os.path.join(wav_dir, wav_name))
+                                
+                                # Check again
+                                extracted_wav_count = len(glob.glob(os.path.join(wav_dir, "*.wav")))
+                                print(f"After alternative extraction: {extracted_wav_count} WAV files in {wav_dir}")
+                                
+                                # Clean up temp directory
+                                shutil.rmtree(temp_extract_dir)
+            except zipfile.BadZipFile:
+                print(f"Error: {zip_file} is not a valid ZIP file. Attempting to redownload...")
+                if download_file(f"{HF_BASE_URL}{zip_file}", zip_path, f"Redownloading {zip_file}"):
+                    print(f"Successfully redownloaded {zip_file}, will try extraction again")
+                    # Try extraction again with the new download
+                    try:
+                        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                            zip_ref.extractall(speaker_dir)
+                        print(f"Successfully extracted redownloaded {zip_file}")
+                    except Exception as e:
+                        print(f"Error extracting redownloaded {zip_file}: {e}")
                 else:
-                    # The ZIP doesn't have a top-level speaker directory
-                    for item in file_list:
-                        target_path = os.path.join(speaker_dir, item)
-                        if item.endswith('/'):
-                            # Create directory
-                            os.makedirs(target_path, exist_ok=True)
-                        else:
-                            # Extract file
-                            try:
-                                # Create parent directory if it doesn't exist
-                                os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                                # Extract the file content
-                                with open(target_path, 'wb') as f:
-                                    f.write(zip_ref.read(item))
-                            except Exception as e:
-                                print(f"Warning: Failed to extract {item}: {e}")
+                    print(f"Failed to redownload {zip_file}")
             
             # Create transcript files if needed
             wav_dir = os.path.join(speaker_dir, "wav")
@@ -349,15 +414,28 @@ def process_with_hour_limit(temp_dir, output_dir, total_hours):
                 files_by_speaker[speaker] = []
             files_by_speaker[speaker].append((wav_path, relative_path, duration))
         
+        # For Chinese speakers, ensure we copy ALL files regardless of hour limit
+        chinese_speakers = ["BWC", "LXC", "NCC", "TXHC"]
+        
         # Select files up to the hour limit, ensuring we have files from all speakers
         selected_files = []
         current_total_duration = 0
         
-        # First, select some files from each speaker to ensure representation
+        # First, select ALL files from Chinese speakers
+        for speaker in chinese_speakers:
+            if speaker in files_by_speaker:
+                for wav_path, relative_path, duration in files_by_speaker[speaker]:
+                    selected_files.append((wav_path, relative_path))
+                    current_total_duration += duration
+                print(f"Selected all {len(files_by_speaker[speaker])} files from Chinese speaker {speaker}")
+                # Remove this speaker from further processing
+                del files_by_speaker[speaker]
+        
+        # Then add files from other speakers until we reach the limit
         files_per_speaker = 50  # Adjust as needed
         for speaker, files in files_by_speaker.items():
             for wav_path, relative_path, duration in files[:files_per_speaker]:
-                if current_total_duration >= total_seconds:
+                if current_total_duration >= total_seconds and speaker not in chinese_speakers:
                     break
                 selected_files.append((wav_path, relative_path))
                 current_total_duration += duration
@@ -365,8 +443,9 @@ def process_with_hour_limit(temp_dir, output_dir, total_hours):
         # Then add more files if we haven't reached the limit
         if current_total_duration < total_seconds:
             remaining_files = []
-            for files in files_by_speaker.values():
-                remaining_files.extend(files[files_per_speaker:])
+            for speaker, files in files_by_speaker.items():
+                if speaker not in chinese_speakers:  # Skip Chinese speakers as we've already added all their files
+                    remaining_files.extend(files[files_per_speaker:])
             
             # Sort by duration
             remaining_files.sort(key=lambda x: x[2])
