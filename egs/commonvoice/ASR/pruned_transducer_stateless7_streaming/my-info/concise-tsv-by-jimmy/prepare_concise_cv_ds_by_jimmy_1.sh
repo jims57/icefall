@@ -97,3 +97,71 @@ else
 fi
 
 echo "Dataset preparation complete!"
+
+# Count total hours of audio
+echo "Step 4: Calculating total audio duration..."
+DURATION_SCRIPT="calculate_audio_duration.py"
+
+# Create the duration calculation script
+cat > "${DURATION_SCRIPT}" << 'EOF'
+#!/usr/bin/env python3
+import os
+import sys
+import pandas as pd
+from pydub import AudioSegment
+import concurrent.futures
+import argparse
+
+def get_audio_duration(file_path):
+    try:
+        audio = AudioSegment.from_mp3(file_path)
+        return len(audio) / 1000.0  # Convert milliseconds to seconds
+    except Exception as e:
+        print(f"Error processing {file_path}: {e}", file=sys.stderr)
+        return 0
+
+def main():
+    parser = argparse.ArgumentParser(description="Calculate total audio duration from TSV files")
+    parser.add_argument("--tsv-files", nargs="+", required=True, help="List of TSV files")
+    parser.add_argument("--clips-dir", required=True, help="Directory containing audio clips")
+    args = parser.parse_args()
+    
+    total_duration = 0
+    file_count = 0
+    
+    for tsv_file in args.tsv_files:
+        if not os.path.exists(tsv_file):
+            print(f"Warning: {tsv_file} does not exist, skipping.")
+            continue
+            
+        df = pd.read_csv(tsv_file, sep='\t')
+        if 'path' not in df.columns:
+            print(f"Warning: {tsv_file} does not have a 'path' column, skipping.")
+            continue
+            
+        file_paths = [os.path.join(args.clips_dir, path) for path in df['path']]
+        file_count += len(file_paths)
+        
+        # Process files in parallel for speed
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            durations = list(executor.map(get_audio_duration, file_paths))
+            total_duration += sum(durations)
+    
+    hours = total_duration / 3600
+    print(f"Processed {file_count} audio files")
+    print(f"Total audio duration: {total_duration:.2f} seconds ({hours:.2f} hours)")
+
+if __name__ == "__main__":
+    main()
+EOF
+
+chmod +x "${DURATION_SCRIPT}"
+
+# Install required packages if not already installed
+pip install pydub pandas
+
+# Run the duration calculation script
+echo "Calculating total audio duration (this may take a while)..."
+python3 "${DURATION_SCRIPT}" --tsv-files train.tsv dev.tsv test.tsv --clips-dir "${CLIPS_DIR}"
+
+echo "All processing complete!"
