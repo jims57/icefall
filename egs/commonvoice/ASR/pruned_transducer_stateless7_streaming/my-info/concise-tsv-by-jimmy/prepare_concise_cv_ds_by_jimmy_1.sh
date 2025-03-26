@@ -26,6 +26,41 @@ CLIPS_DIR="./clips"
 DEV_RATIO=0.1
 TEST_RATIO=0.1
 SEED=42
+COUNT_TOTAL_HOURS=true
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --custom-validated-tsv)
+      CUSTOM_VALIDATED_TSV="$2"
+      shift 2
+      ;;
+    --clips-dir)
+      CLIPS_DIR="$2"
+      shift 2
+      ;;
+    --dev-ratio)
+      DEV_RATIO="$2"
+      shift 2
+      ;;
+    --test-ratio)
+      TEST_RATIO="$2"
+      shift 2
+      ;;
+    --seed)
+      SEED="$2"
+      shift 2
+      ;;
+    --count-total-hours)
+      COUNT_TOTAL_HOURS="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown option: $1"
+      exit 1
+      ;;
+  esac
+done
 
 # Step 1: Fix dataset mismatch
 echo "Step 1: Fixing dataset mismatch..."
@@ -98,12 +133,13 @@ fi
 
 echo "Dataset preparation complete!"
 
-# Count total hours of audio
-echo "Step 4: Calculating total audio duration..."
-DURATION_SCRIPT="calculate_audio_duration.py"
-
-# Create the duration calculation script
-cat > "${DURATION_SCRIPT}" << 'EOF'
+# Count total hours of audio if requested
+if [ "${COUNT_TOTAL_HOURS}" = "true" ]; then
+  echo "Step 4: Calculating total audio duration..."
+  DURATION_SCRIPT="calculate_audio_duration.py"
+  
+  # Create the duration calculation script
+  cat > "${DURATION_SCRIPT}" << 'EOF'
 #!/usr/bin/env python3
 import os
 import sys
@@ -155,13 +191,16 @@ if __name__ == "__main__":
     main()
 EOF
 
-chmod +x "${DURATION_SCRIPT}"
+  chmod +x "${DURATION_SCRIPT}"
 
-# Install required packages if not already installed
-pip install pydub pandas
+  # Install required packages if not already installed
+  pip install pydub pandas
 
-# Run the duration calculation script
-echo "Calculating total audio duration (this may take a while)..."
-python3 "${DURATION_SCRIPT}" --tsv-files train.tsv dev.tsv test.tsv --clips-dir "${CLIPS_DIR}"
+  # Run the duration calculation script
+  echo "Calculating total audio duration (this may take a while)..."
+  python3 "${DURATION_SCRIPT}" --tsv-files train.tsv dev.tsv test.tsv --clips-dir "${CLIPS_DIR}"
+else
+  echo "Skipping audio duration calculation (--count-total-hours is set to false)"
+fi
 
 echo "All processing complete!"
