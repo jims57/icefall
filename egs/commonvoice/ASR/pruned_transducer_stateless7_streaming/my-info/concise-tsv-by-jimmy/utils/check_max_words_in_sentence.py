@@ -11,8 +11,9 @@ def main():
         print(f"Error: File {tsv_path} not found!")
         return
     
-    # Instead of tracking just one max sentence, we'll track the top 3
+    # Track the top 3 and bottom 3 sentences
     top_sentences = []
+    min_sentences = []
     total_sentences = 0
     
     # Read the TSV file
@@ -21,7 +22,7 @@ def main():
         next(tsv_file)
         
         # Process each row
-        for line in tsv_file:
+        for line_idx, line in enumerate(tsv_file, 2):  # Start from 2 (after header)
             total_sentences += 1
             
             # Split the line by tabs
@@ -36,20 +37,35 @@ def main():
                 
                 # Only consider the sentence if it has words
                 if word_count > 0:
-                    # Update top sentences list
-                    top_sentences.append((word_count, sentence))
+                    # Update top sentences list with (count, row_id, sentence)
+                    top_sentences.append((word_count, line_idx, sentence))
                     
                     # Sort and keep only the top 3
                     top_sentences.sort(reverse=True)
                     if len(top_sentences) > 3:
                         top_sentences.pop()
+                    
+                    # Update min sentences list
+                    min_sentences.append((word_count, line_idx, sentence))
+                    
+                    # Sort and keep only the bottom 3
+                    min_sentences.sort()  # Sort ascending
+                    if len(min_sentences) > 3:
+                        min_sentences.pop()
     
     # Print results in a user-friendly format
     print(f"Analyzed {total_sentences} sentences in total.")
-    print(f"\nTop 3 sentences with maximum word count:")
     
-    for i, (count, sentence) in enumerate(top_sentences, 1):
-        print(f"\n{i}. Sentence with {count} words:")
+    # Print top 3 sentences
+    print(f"\nTop 3 sentences with maximum word count:")
+    for i, (count, row_id, sentence) in enumerate(top_sentences, 1):
+        print(f"\n{i}. Sentence with {count} words (Row {row_id}):")
+        print(f'"{sentence}"')
+    
+    # Print bottom 3 sentences
+    print(f"\nBottom 3 sentences with minimum word count:")
+    for i, (count, row_id, sentence) in enumerate(min_sentences, 1):
+        print(f"\n{i}. Sentence with {count} words (Row {row_id}):")
         print(f'"{sentence}"')
 
 if __name__ == "__main__":
