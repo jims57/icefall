@@ -36,17 +36,47 @@ def format_sentence(sentence):
     return sentence.lower().capitalize()
 
 def cleanup_mp3_filenames(clips_dir):
-    """Rename any MP3 files with .WAV.mp3 or .wav.mp3 to a more unique format"""
+    """Rename any MP3 files with .WAV.mp3 or .wav.mp3 to a more unique format with speaker ID"""
     renamed_count = 0
+    wave_dir = "WAVE"
+    
     for filename in os.listdir(clips_dir):
-        if filename.endswith('.WAV.mp3') or filename.endswith('.wav.mp3'):
-            # Create a more unique name by replacing the extension with an underscore
+        if filename.endswith('.WAV.mp3') or filename.endswith('.wav.mp3') or filename.endswith('_WAV.mp3') or filename.endswith('_wav.mp3'):
+            # Extract base name without extension
             if filename.endswith('.WAV.mp3'):
                 base_name = filename[:-8]  # Remove .WAV.mp3
-                new_name = f"{base_name}_WAV.mp3"
-            else:
+            elif filename.endswith('.wav.mp3'):
                 base_name = filename[:-8]  # Remove .wav.mp3
-                new_name = f"{base_name}_wav.mp3"
+            elif filename.endswith('_WAV.mp3'):
+                base_name = filename[:-8]  # Remove _WAV.mp3
+            elif filename.endswith('_wav.mp3'):
+                base_name = filename[:-8]  # Remove _wav.mp3
+            else:
+                base_name = os.path.splitext(filename)[0]
+            
+            # Try to find the original WAV file to determine the speaker ID
+            speaker_name = None
+            if os.path.exists(wave_dir):
+                for speaker_dir in os.listdir(wave_dir):
+                    speaker_path = os.path.join(wave_dir, speaker_dir)
+                    if os.path.isdir(speaker_path):
+                        wav_file = f"{base_name}.WAV"
+                        wav_file_alt = f"{base_name}.wav"
+                        if os.path.exists(os.path.join(speaker_path, wav_file)) or os.path.exists(os.path.join(speaker_path, wav_file_alt)):
+                            # Check if speaker_dir already has SPEAKER prefix
+                            if speaker_dir.startswith("SPEAKER"):
+                                speaker_name = speaker_dir
+                            else:
+                                speaker_name = f"SPEAKER{speaker_dir}"
+                            break
+            
+            # Default speaker name if we can't determine it
+            if not speaker_name:
+                speaker_name = "SPEAKER0000"
+                print(f"Warning: Could not determine speaker ID for {filename}, using {speaker_name}")
+            
+            # Create a new name with SPEAKER prefix
+            new_name = f"{speaker_name}_{base_name}.mp3"
                 
             old_path = os.path.join(clips_dir, filename)
             new_path = os.path.join(clips_dir, new_name)
@@ -60,7 +90,7 @@ def cleanup_mp3_filenames(clips_dir):
                 print(f"Warning: Cannot rename {filename} to {new_name} as it already exists")
     
     if renamed_count > 0:
-        print(f"Renamed {renamed_count} MP3 files to use more unique naming convention")
+        print(f"Renamed {renamed_count} MP3 files to use speaker ID naming convention")
     
     return renamed_count
 
@@ -127,12 +157,15 @@ def main():
         # Extract the base name without extension
         if wav_file.upper().endswith('.WAV'):
             base_name = wav_file[:-4]  # Remove .WAV extension
-            # Create a more unique MP3 filename
-            mp3_name = f"{base_name}_WAV.mp3"
         else:
             base_name = os.path.splitext(wav_file)[0]  # General case
-            # Create a more unique MP3 filename
-            mp3_name = f"{base_name}_wav.mp3"
+            
+        # Extract speaker ID from the path
+        speaker_dir = os.path.basename(os.path.dirname(wav_path))
+        speaker_name = f"SPEAKER{speaker_dir}"
+            
+        # Create a more unique MP3 filename with speaker ID
+        mp3_name = f"{speaker_name}_{base_name}.mp3"
             
         mp3_path = os.path.join(clips_dir, mp3_name)
         
@@ -190,6 +223,9 @@ def main():
                 uttid = mp3_name[:-8]  # Remove _WAV.mp3
             elif mp3_name.endswith('_wav.mp3'):
                 uttid = mp3_name[:-8]  # Remove _wav.mp3
+            elif '_' in mp3_name and mp3_name.startswith('SPEAKER'):
+                # Handle new format: SPEAKER0001_004570283.mp3
+                uttid = mp3_name.split('_', 1)[1][:-4]  # Get part after SPEAKER prefix and before .mp3
             else:
                 uttid = os.path.splitext(mp3_name)[0]
             
@@ -320,6 +356,9 @@ def rebuild_tsv_from_mp3_files(clips_dir, tsv_file):
                 uttid = mp3_name[:-8]  # Remove _WAV.mp3
             elif mp3_name.endswith('_wav.mp3'):
                 uttid = mp3_name[:-8]  # Remove _wav.mp3
+            elif '_' in mp3_name and mp3_name.startswith('SPEAKER'):
+                # Handle new format: SPEAKER0001_004570283.mp3
+                uttid = mp3_name.split('_', 1)[1][:-4]  # Get part after SPEAKER prefix and before .mp3
             else:
                 uttid = os.path.splitext(mp3_name)[0]
             
