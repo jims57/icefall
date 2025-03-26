@@ -137,19 +137,48 @@ def main():
     if args.dev_ratio + args.test_ratio >= 1.0:
         raise ValueError("The sum of dev_ratio and test_ratio should be less than 1.0")
     
-    total_rows_in_file = count_rows(args.validated_tsv)
+    # Filter out rows with empty sentences from validated.tsv
+    filtered_rows = []
+    empty_sentence_mp3s = set()
+    
+    with open(args.validated_tsv, "r", encoding="utf-8") as f:
+        reader = csv.reader(f, delimiter="\t")
+        header = next(reader)  # Get the header
+        
+        # Find the index of the sentence column
+        sentence_idx = header.index("sentence") if "sentence" in header else 2  # Default to index 2 if not found
+        path_idx = header.index("path") if "path" in header else 1  # Default to index 1 if not found
+        
+        # Filter rows with empty sentences
+        for row in reader:
+            if row[sentence_idx].strip():  # Check if sentence is not empty
+                filtered_rows.append(row)
+            else:
+                empty_sentence_mp3s.add(row[path_idx])
+                print(f"Skipping row with empty sentence: {row[path_idx]}")
+    
+    # Delete MP3 files corresponding to empty sentences
+    clips_dir = Path(args.clips_dir)
+    if clips_dir.exists() and clips_dir.is_dir():
+        for mp3_file in empty_sentence_mp3s:
+            mp3_path = clips_dir / mp3_file
+            if mp3_path.exists():
+                print(f"Deleting MP3 with empty sentence: {mp3_file}")
+                mp3_path.unlink()
+    
+    # Continue with the filtered rows
+    total_rows_in_file = len(filtered_rows)
     num_to_select = min(args.total_rows, total_rows_in_file)
     
-    print(f"Total data rows in {args.validated_tsv}: {total_rows_in_file}")
+    print(f"Total data rows after filtering empty sentences: {total_rows_in_file}")
     print(f"Selecting {num_to_select} random data rows")
     
-    # Select random rows from the validated.tsv
-    header, selected_rows = select_random_rows(
-        args.validated_tsv, total_rows_in_file, num_to_select, args.seed
-    )
+    # Shuffle the filtered rows to ensure randomness
+    random.seed(args.seed)
+    random.shuffle(filtered_rows)
     
-    # Shuffle the selected rows to ensure randomness in the split
-    random.shuffle(selected_rows)
+    # Select the required number of rows
+    selected_rows = filtered_rows[:num_to_select]
     
     # For small datasets: ensure exact allocation with minimums of 1 for dev/test
     if num_to_select >= 3:
@@ -224,23 +253,6 @@ def main():
     
     # Debug info
     print(f"Selected {len(selected_mp3s)} unique MP3 files")
-    
-    # Delete MP3 files that are not in the selected set
-    clips_dir = Path(args.clips_dir)
-    if clips_dir.exists() and clips_dir.is_dir():
-        deleted_count = 0
-        total_mp3s = 0
-        for mp3_file in clips_dir.glob("*.mp3"):
-            total_mp3s += 1
-            if mp3_file.name not in selected_mp3s:
-                print(f"Deleting unneeded MP3: {mp3_file.name}")
-                mp3_file.unlink()
-                deleted_count += 1
-        
-        print(f"Found {total_mp3s} total MP3 files")
-        print(f"Deleted {deleted_count} MP3 files not included in the selection")
-    else:
-        print(f"Warning: Clips directory {args.clips_dir} not found")
     
     print("Done!")
 

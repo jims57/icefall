@@ -131,15 +131,60 @@ def main():
     if args.dev_ratio + args.test_ratio >= 1.0:
         raise ValueError("The sum of dev_ratio and test_ratio should be less than 1.0")
     
-    # Read all rows from custom_validated.tsv
-    all_rows = []
+    # Filter out rows with empty sentences from custom_validated.tsv
+    filtered_rows = []
+    empty_sentence_count = 0
+    
     with open(args.custom_validated_tsv, "r", encoding="utf-8") as f:
         reader = csv.reader(f, delimiter="\t")
         header = next(reader)  # Get the header
+        
+        # Find the index of the sentence column
+        sentence_idx = header.index("sentence") if "sentence" in header else 2  # Default to index 2 if not found
+        
+        # Filter rows with empty sentences
         for row in reader:
-            all_rows.append(row)
+            if len(row) > sentence_idx and row[sentence_idx].strip():  # Check if sentence is not empty
+                filtered_rows.append(row)
+            else:
+                empty_sentence_count += 1
+                print(f"Skipping row with empty sentence: {row[1] if len(row) > 1 else 'unknown'}")
     
-    print(f"Total data rows in {args.custom_validated_tsv}: {len(all_rows)}")
+    print(f"Removed {empty_sentence_count} rows with empty sentences")
+    
+    # Write the filtered rows back to custom_validated.tsv
+    with open(args.custom_validated_tsv, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f, delimiter="\t")
+        writer.writerow(header)
+        writer.writerows(filtered_rows)
+    
+    print(f"Updated {args.custom_validated_tsv} with {len(filtered_rows)} valid rows")
+    
+    # Get the set of valid MP3 filenames from the filtered rows
+    valid_mp3s = set()
+    for row in filtered_rows:
+        mp3_path = row[1]  # The path column (index 1) contains the mp3 filename
+        # Extract just the filename from the path
+        mp3_filename = os.path.basename(mp3_path)
+        valid_mp3s.add(mp3_filename)
+    
+    # Delete any MP3 files in the clips directory that aren't in the valid set
+    clips_dir = Path(args.clips_dir)
+    if clips_dir.exists() and clips_dir.is_dir():
+        print(f"Checking MP3 files in {clips_dir}...")
+        deleted_count = 0
+        
+        for mp3_file in clips_dir.glob("*.mp3"):
+            if mp3_file.name not in valid_mp3s:
+                print(f"Deleting MP3 file not in valid set: {mp3_file.name}")
+                mp3_file.unlink()
+                deleted_count += 1
+        
+        print(f"Deleted {deleted_count} MP3 files not corresponding to valid entries")
+    
+    # Continue with the filtered rows
+    all_rows = filtered_rows
+    print(f"Total data rows in {args.custom_validated_tsv} after filtering: {len(all_rows)}")
     
     # Shuffle the rows to ensure randomness in the split
     random.seed(args.seed)
@@ -211,61 +256,6 @@ def main():
     print(f"Wrote {len(test_rows)} data rows to test.tsv")
     print(f"Wrote {len(train_rows)} data rows to train.tsv")
     print(f"Each file also has 1 header row")
-    
-    # Collect the mp3 filenames from all rows - use a set for O(1) lookups
-    selected_mp3s = set()
-    for row in all_rows:
-        mp3_path = row[1]  # The path column (index 1) contains the mp3 filename
-        # Extract just the filename from the path
-        mp3_filename = os.path.basename(mp3_path)
-        selected_mp3s.add(mp3_filename)
-    
-    # Debug info
-    print(f"Selected {len(selected_mp3s)} unique MP3 files")
-    
-    # Handle MP3 files in the clips directory
-    clips_dir = Path(args.clips_dir)
-    if clips_dir.exists() and clips_dir.is_dir():
-        print(f"Processing MP3 files in {clips_dir}...")
-        
-        # Process files in batches to avoid memory issues
-        batch_size = 10000
-        deleted_count = 0
-        total_mp3s = 0
-        
-        # Get a generator of all MP3 files (doesn't load them all into memory)
-        all_mp3_files = clips_dir.glob("*.mp3")
-        
-        # Process in batches
-        current_batch = []
-        for mp3_file in all_mp3_files:
-            total_mp3s += 1
-            
-            # Print progress every 100,000 files
-            if total_mp3s % 100000 == 0:
-                print(f"Processed {total_mp3s} MP3 files so far...")
-            
-            if mp3_file.name not in selected_mp3s:
-                current_batch.append(mp3_file)
-                
-                # When batch is full, delete files and reset batch
-                if len(current_batch) >= batch_size:
-                    for file_to_delete in current_batch:
-                        file_to_delete.unlink()
-                        deleted_count += 1
-                    
-                    print(f"Deleted batch of {len(current_batch)} unneeded MP3 files. Total deleted: {deleted_count}")
-                    current_batch = []
-        
-        # Delete any remaining files in the last batch
-        for file_to_delete in current_batch:
-            file_to_delete.unlink()
-            deleted_count += 1
-        
-        print(f"Found {total_mp3s} total MP3 files")
-        print(f"Deleted {deleted_count} MP3 files not included in the selection")
-    else:
-        print(f"Warning: Clips directory {args.clips_dir} not found")
     
     print("Done!")
 
