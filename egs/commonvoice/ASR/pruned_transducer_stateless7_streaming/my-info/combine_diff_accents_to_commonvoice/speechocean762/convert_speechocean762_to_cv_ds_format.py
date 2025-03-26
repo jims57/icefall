@@ -9,6 +9,9 @@ import argparse
 import sys
 from pydub import AudioSegment
 import shutil
+import tarfile
+import urllib.request
+import tempfile
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Convert SpeechOcean762 format to CommonVoice dataset format")
@@ -17,7 +20,123 @@ def parse_arguments():
     parser.add_argument("--output_dir", type=str, default="clips", help="Directory where MP3 files are located/will be saved")
     parser.add_argument("--sync_files", action="store_true", help="Ensure TSV entries match MP3 files in output directory")
     parser.add_argument("--rebuild_tsv", action="store_true", help="Completely rebuild TSV file from MP3 files in output directory")
+    parser.add_argument("--download", action="store_true", help="Download SpeechOcean762 dataset if not already downloaded")
     return parser.parse_args()
+
+# Function to download and extract SpeechOcean762 dataset
+def download_speechocean762():
+    download_url = "https://github.com/jimbozhang/speechocean762/archive/refs/tags/v1.2.0.tar.gz"
+    download_dir = os.path.expanduser("~/icefall/egs/commonvoice/ASR/download/speechocean762-1.2.0")
+    
+    # Create download directory if it doesn't exist
+    os.makedirs(download_dir, exist_ok=True)
+    
+    # Check if dataset is already downloaded
+    if os.path.exists(os.path.join(download_dir, "download")) and \
+       os.path.exists(os.path.join(download_dir, "download", "speechocean762-1.2.0", "train", "text")) and \
+       os.path.exists(os.path.join(download_dir, "download", "speechocean762-1.2.0", "test", "text")):
+        print("SpeechOcean762 dataset already downloaded.")
+        return download_dir
+    
+    print(f"Downloading SpeechOcean762 dataset from {download_url}...")
+    
+    # Download the tar.gz file
+    tar_path = os.path.join(download_dir, "speechocean762-v1.2.0.tar.gz")
+    try:
+        urllib.request.urlretrieve(download_url, tar_path)
+    except Exception as e:
+        print(f"Error downloading dataset: {e}", file=sys.stderr)
+        return None
+    
+    print(f"Downloaded to {tar_path}")
+    
+    # Create a download subdirectory
+    os.makedirs(os.path.join(download_dir, "download"), exist_ok=True)
+    
+    # Extract the tar.gz file
+    print("Extracting dataset...")
+    try:
+        with tarfile.open(tar_path, "r:gz") as tar:
+            tar.extractall(path=os.path.join(download_dir, "download"))
+    except Exception as e:
+        print(f"Error extracting dataset: {e}", file=sys.stderr)
+        return None
+    
+    # Create symbolic links to maintain expected folder structure
+    # Link train/text and test/text to current directory
+    current_dir = os.getcwd()
+    
+    # Create train and test directories in current directory
+    os.makedirs(os.path.join(current_dir, "train"), exist_ok=True)
+    os.makedirs(os.path.join(current_dir, "test"), exist_ok=True)
+    
+    # Copy text files to current directory structure
+    shutil.copy(
+        os.path.join(download_dir, "download", "speechocean762-1.2.0", "train", "text"),
+        os.path.join(current_dir, "train", "text")
+    )
+    shutil.copy(
+        os.path.join(download_dir, "download", "speechocean762-1.2.0", "test", "text"),
+        os.path.join(current_dir, "test", "text")
+    )
+    
+    # Create WAVE directory structure in current directory
+    wave_dir = os.path.join(current_dir, "WAVE")
+    os.makedirs(wave_dir, exist_ok=True)
+    
+    # Find all WAV files in the downloaded dataset and create symbolic links
+    src_wave_dir = os.path.join(download_dir, "download", "WAVE")
+    if os.path.exists(src_wave_dir):
+        # If WAVE directory exists in download, create symbolic links to all speaker directories
+        for speaker_dir in os.listdir(src_wave_dir):
+            src_speaker_path = os.path.join(src_wave_dir, speaker_dir)
+            dst_speaker_path = os.path.join(wave_dir, speaker_dir)
+            
+            if os.path.isdir(src_speaker_path) and not os.path.exists(dst_speaker_path):
+                os.makedirs(dst_speaker_path, exist_ok=True)
+                
+                # Create symbolic links for all WAV files
+                for wav_file in os.listdir(src_speaker_path):
+                    if wav_file.endswith('.WAV') or wav_file.endswith('.wav'):
+                        src_wav_path = os.path.join(src_speaker_path, wav_file)
+                        dst_wav_path = os.path.join(dst_speaker_path, wav_file)
+                        
+                        # Create a hard copy instead of a symbolic link
+                        shutil.copy2(src_wav_path, dst_wav_path)
+    else:
+        print("Warning: WAVE directory not found in downloaded dataset. Looking for alternative structure...")
+        
+        # Try to find WAV files in an alternative structure
+        for root, dirs, files in os.walk(os.path.join(download_dir, "download")):
+            for file in files:
+                if file.endswith('.WAV') or file.endswith('.wav'):
+                    # Extract speaker ID from path if possible
+                    path_parts = root.split(os.sep)
+                    speaker_id = None
+                    
+                    # Try to find a part that looks like a speaker ID
+                    for part in path_parts:
+                        if part.startswith("SPEAKER") or part.isdigit():
+                            speaker_id = part
+                            break
+                    
+                    if not speaker_id:
+                        # If no speaker ID found, use a default
+                        speaker_id = "SPEAKER0000"
+                    
+                    # Ensure speaker directory exists
+                    speaker_dir = os.path.join(wave_dir, speaker_id)
+                    os.makedirs(speaker_dir, exist_ok=True)
+                    
+                    # Copy the WAV file
+                    src_wav_path = os.path.join(root, file)
+                    dst_wav_path = os.path.join(speaker_dir, file)
+                    shutil.copy2(src_wav_path, dst_wav_path)
+    
+    print(f"SpeechOcean762 dataset downloaded and extracted to {download_dir}")
+    print(f"Created necessary directory structure in current directory")
+    
+    return download_dir
 
 # Function to generate random client_id with the same length as example
 def generate_client_id():
@@ -96,6 +215,13 @@ def cleanup_mp3_filenames(clips_dir):
 
 def main():
     args = parse_arguments()
+    
+    # Download dataset if requested
+    if args.download:
+        download_dir = download_speechocean762()
+        if not download_dir:
+            print("Failed to download dataset. Exiting.")
+            return
     
     # Use the specified output directory
     clips_dir = args.output_dir

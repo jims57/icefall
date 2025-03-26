@@ -109,8 +109,30 @@ fi
 
 # Check if the required directories exist
 if [ ! -d "WAVE" ]; then
-    echo "Error: WAVE directory not found. Please make sure SpeechOcean762 dataset is properly downloaded."
-    exit 1
+    echo "WAVE directory not found. Attempting to download SpeechOcean762 dataset..."
+    
+    # Check if Python is available
+    if ! command -v python &> /dev/null; then
+        echo "Error: Python is not installed or not in PATH"
+        exit 1
+    fi
+    
+    # Check if the convert script exists
+    if [ ! -f "convert_speechocean762_to_cv_ds_format.py" ]; then
+        echo "Error: convert_speechocean762_to_cv_ds_format.py script not found"
+        exit 1
+    fi
+    
+    # Download the dataset using the Python script
+    python convert_speechocean762_to_cv_ds_format.py --download
+    
+    # Check if download was successful
+    if [ ! -d "WAVE" ]; then
+        echo "Error: Failed to download SpeechOcean762 dataset or WAVE directory not created"
+        exit 1
+    else
+        echo "Successfully downloaded SpeechOcean762 dataset"
+    fi
 fi
 
 if [ ! -f "train/text" ] && [ ! -f "test/text" ]; then
