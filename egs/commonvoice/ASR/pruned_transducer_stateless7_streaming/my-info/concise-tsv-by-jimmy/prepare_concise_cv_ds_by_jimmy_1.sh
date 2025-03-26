@@ -20,6 +20,42 @@ set -o pipefail  # Exit if any command in a pipe fails
 
 echo "Starting preparation of concise CommonVoice dataset..."
 
+# Default parameters
+CUSTOM_VALIDATED_TSV="custom_validated.tsv"
+CLIPS_DIR="./clips"
+DEV_RATIO=0.1
+TEST_RATIO=0.1
+SEED=42
+
+# Step 1: Fix dataset mismatch
+echo "Step 1: Fixing dataset mismatch..."
+if [ -f "fix_dataset_mismatch.py" ]; then
+  python3 fix_dataset_mismatch.py
+  echo "Dataset mismatch fix completed."
+else
+  echo "Error: fix_dataset_mismatch.py not found."
+  exit 1
+fi
+
+# Step 2: Check consistency
+echo "Step 2: Checking dataset consistency..."
+if [ -f "check_consistency.sh" ]; then
+  bash check_consistency.sh
+  
+  # Check if the consistency check was successful
+  if [ $? -ne 0 ]; then
+    echo "Error: Dataset consistency check failed. Please fix the inconsistencies before proceeding."
+    exit 1
+  fi
+  echo "Dataset consistency check passed."
+else
+  echo "Error: check_consistency.sh not found."
+  exit 1
+fi
+
+# Step 3: Create TSV files
+echo "Step 3: Creating train, dev, and test TSV files..."
+
 # Locate the Python script
 PYTHON_SCRIPT="create_tsv_files_by_custom_validated_tsv.py"
 SCRIPT_PATH=""
@@ -39,13 +75,6 @@ fi
 
 # Make sure the script is executable
 chmod +x "${SCRIPT_PATH}"
-
-# Default parameters
-CUSTOM_VALIDATED_TSV="custom_validated.tsv"
-CLIPS_DIR="../clips"
-DEV_RATIO=0.1
-TEST_RATIO=0.1
-SEED=42
 
 echo "Running Python script to create TSV files..."
 python3 "${SCRIPT_PATH}" \
