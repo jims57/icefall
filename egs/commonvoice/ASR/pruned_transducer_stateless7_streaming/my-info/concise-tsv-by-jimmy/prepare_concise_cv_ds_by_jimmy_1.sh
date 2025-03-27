@@ -20,14 +20,21 @@ set -o pipefail  # Exit if any command in a pipe fails
 
 echo "Starting preparation of concise CommonVoice dataset..."
 
-# Check if jq is installed, if not, install it
+# Check if jq is installed, if not, install it using conda
 if ! command -v jq &> /dev/null; then
-  echo "jq not found. Installing jq..."
-  wget -O jq https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64
-  chmod +x ./jq
-  # Use local jq if we can't install to /usr/bin
-  export PATH=$PWD:$PATH
-  echo "jq installed successfully in the current directory."
+  echo "jq not found. Installing jq using conda..."
+  
+  # Check if we're in a conda environment
+  if [[ -n $CONDA_PREFIX ]]; then
+    conda install -y -c conda-forge jq
+    echo "jq installed successfully via conda in the icefall environment."
+  else
+    echo "Warning: Not in a conda environment. Installing jq locally..."
+    wget -O jq https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64
+    chmod +x ./jq
+    export PATH=$PWD:$PATH
+    echo "jq installed successfully in the current directory."
+  fi
 fi
 
 # Default parameters
@@ -152,7 +159,9 @@ if [ "${COUNT_TOTAL_HOURS}" = "true" ]; then
   if ! command -v ffmpeg &> /dev/null || ! command -v ffprobe &> /dev/null; then
     echo "FFmpeg/ffprobe is required but not installed. Installing now..."
     # Try to install ffmpeg based on the system
-    if command -v apt-get &> /dev/null; then
+    if [[ -n $CONDA_PREFIX ]]; then
+      conda install -y -c conda-forge ffmpeg
+    elif command -v apt-get &> /dev/null; then
       sudo apt-get update && sudo apt-get install -y ffmpeg
     elif command -v yum &> /dev/null; then
       sudo yum install -y ffmpeg
@@ -230,3 +239,8 @@ else
 fi
 
 echo "All processing complete!"
+echo ""
+echo "IMPORTANT: Make sure jq is available when running prepare.sh"
+echo "If you encounter 'jq: command not found' when running prepare.sh, run:"
+echo "  conda install -y -c conda-forge jq"
+echo ""
