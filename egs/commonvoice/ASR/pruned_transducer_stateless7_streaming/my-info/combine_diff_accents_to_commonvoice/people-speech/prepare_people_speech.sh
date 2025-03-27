@@ -32,9 +32,10 @@
 # 3. Downloads People's Speech dataset parquet files
 
 # Default values for parameters
-download_total=10
+download_total=1
 dev_ratio=0.1
 test_ratio=0.1
+merge_into_dir="../concise-cv-ds-by-jimmy-1"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -49,6 +50,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --test-ratio)
       test_ratio="$2"
+      shift 2
+      ;;
+    --merge-into-dir)
+      merge_into_dir="$2"
       shift 2
       ;;
     *)
@@ -93,27 +98,189 @@ python convert_parquets_files_into_mp3_and_transcripts.py
 echo "People Speech conversion completed."
 
 # Create 'en' directory if it doesn't exist
-if [ ! -d "en" ]; then
-  echo "Creating 'en' directory..."
-  mkdir -p en
-else
-  echo "Directory 'en' already exists."
-fi
+if [ -z "$merge_into_dir" ]; then
+  if [ ! -d "en" ]; then
+    echo "Creating 'en' directory..."
+    mkdir -p en
+  else
+    echo "Directory 'en' already exists."
+  fi
 
-# Move clips folder and custom_validated.tsv to en directory
-echo "Moving clips folder and custom_validated.tsv to en directory..."
-if [ -d "clips" ]; then
-  mv clips en/
-  echo "Moved clips folder to en directory."
-else
-  echo "Warning: clips folder not found."
-fi
+  # Move clips folder and custom_validated.tsv to en directory
+  echo "Moving clips folder and custom_validated.tsv to en directory..."
+  if [ -d "clips" ]; then
+    mv clips en/
+    echo "Moved clips folder to en directory."
+  else
+    echo "Warning: clips folder not found."
+  fi
 
-if [ -f "custom_validated.tsv" ]; then
-  mv custom_validated.tsv en/
-  echo "Moved custom_validated.tsv to en directory."
+  if [ -f "custom_validated.tsv" ]; then
+    mv custom_validated.tsv en/
+    echo "Moved custom_validated.tsv to en directory."
+  else
+    echo "Warning: custom_validated.tsv file not found."
+  fi
 else
-  echo "Warning: custom_validated.tsv file not found."
+  # We're merging into an existing directory
+  echo "Merging data into $merge_into_dir..."
+  
+  # Create target directories if they don't exist
+  mkdir -p "$merge_into_dir/en/clips"
+  
+  # Check if clips folder exists and copy its contents
+  if [ -d "clips" ]; then
+    echo "Copying clips to $merge_into_dir/en/clips..."
+    cp -r clips/* "$merge_into_dir/en/clips/"
+  elif [ -d "en/clips" ]; then
+    echo "Copying en/clips to $merge_into_dir/en/clips..."
+    cp -r en/clips/* "$merge_into_dir/en/clips/"
+  else
+    echo "Warning: No clips folder found to copy."
+  fi
+  
+  # Check for the target TSV file in multiple possible locations
+  target_tsv=""
+  if [ -f "$merge_into_dir/en/custom_validated.tsv" ]; then
+    target_tsv="$merge_into_dir/en/custom_validated.tsv"
+  elif [ -f "$merge_into_dir/custom_validated.tsv" ]; then
+    # If it's in the root of merge_into_dir, create the en directory and move it there
+    mkdir -p "$merge_into_dir/en"
+    mv "$merge_into_dir/custom_validated.tsv" "$merge_into_dir/en/custom_validated.tsv"
+    target_tsv="$merge_into_dir/en/custom_validated.tsv"
+  elif [ -f "$(dirname $merge_into_dir)/custom_validated.tsv" ]; then
+    # Check one level up
+    mkdir -p "$merge_into_dir/en"
+    cp "$(dirname $merge_into_dir)/custom_validated.tsv" "$merge_into_dir/en/custom_validated.tsv"
+    target_tsv="$merge_into_dir/en/custom_validated.tsv"
+  fi
+  
+  # Handle the TSV file
+  if [ -n "$target_tsv" ]; then
+    echo "Target custom_validated.tsv found at $target_tsv, merging data..."
+    
+    # Determine source TSV
+    if [ -f "custom_validated.tsv" ]; then
+      source_tsv="custom_validated.tsv"
+    elif [ -f "en/custom_validated.tsv" ]; then
+      source_tsv="en/custom_validated.tsv"
+    else
+      echo "Error: No source TSV file found for merging."
+      exit 1
+    fi
+    
+    # Create a Python script to merge TSV files without duplicates
+    cat > merge_tsv_files.py << 'EOL'
+#!/usr/bin/env python3
+import argparse
+import csv
+import os
+
+def main():
+    parser = argparse.ArgumentParser(description="Merge TSV files without duplicates")
+    parser.add_argument("--source", type=str, required=True, help="Source TSV file")
+    parser.add_argument("--target", type=str, required=True, help="Target TSV file to merge into")
+    parser.add_argument("--output", type=str, required=True, help="Output TSV file")
+    args = parser.parse_args()
+    
+    # Read target file data to detect duplicates
+    target_paths = set()
+    target_sentences = set()
+    target_rows = []
+    
+    with open(args.target, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        header = next(reader)  # Read header
+        for row in reader:
+            path = row[1] if len(row) > 1 else ""
+            sentence = row[3] if len(row) > 3 else ""
+            
+            # Store paths and sentences for duplicate detection
+            if path:
+                target_paths.add(os.path.basename(path))
+            if sentence:
+                target_sentences.add(sentence.strip())
+            
+            target_rows.append(row)
+    
+    # Read source file and find new entries
+    new_rows = []
+    duplicates = 0
+    
+    with open(args.source, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='\t')
+        source_header = next(reader)  # Skip header
+        
+        for row in reader:
+            path = row[1] if len(row) > 1 else ""
+            sentence = row[3] if len(row) > 3 else ""
+            
+            # Check for duplicates
+            filename = os.path.basename(path) if path else ""
+            is_duplicate = False
+            
+            if filename and filename in target_paths:
+                is_duplicate = True
+            elif sentence and sentence.strip() in target_sentences:
+                is_duplicate = True
+            
+            if is_duplicate:
+                duplicates += 1
+            else:
+                new_rows.append(row)
+                # Add to sets to prevent duplicates within source file
+                if path:
+                    target_paths.add(os.path.basename(path))
+                if sentence:
+                    target_sentences.add(sentence.strip())
+    
+    # Write merged data to output file
+    with open(args.output, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f, delimiter='\t')
+        writer.writerow(header)
+        writer.writerows(target_rows)
+        writer.writerows(new_rows)
+    
+    print(f"Merged files: {len(new_rows)} new entries added, {duplicates} duplicates skipped")
+
+if __name__ == "__main__":
+    main()
+EOL
+    
+    # Make script executable
+    chmod +x merge_tsv_files.py
+    
+    # Merge TSV files
+    python merge_tsv_files.py --source="$source_tsv" --target="$target_tsv" --output="$target_tsv.new"
+    mv "$target_tsv.new" "$target_tsv"
+    
+    echo "Data successfully merged into $merge_into_dir"
+  else
+    # Target TSV doesn't exist, create it from scratch
+    echo "Target custom_validated.tsv doesn't exist, creating it..."
+    
+    # Create the target directory if it doesn't exist
+    mkdir -p "$merge_into_dir/en"
+    
+    if [ -f "custom_validated.tsv" ]; then
+      cp custom_validated.tsv "$merge_into_dir/en/custom_validated.tsv"
+      echo "Copied custom_validated.tsv to $merge_into_dir/en/"
+    elif [ -f "en/custom_validated.tsv" ]; then
+      cp en/custom_validated.tsv "$merge_into_dir/en/custom_validated.tsv"
+      echo "Copied en/custom_validated.tsv to $merge_into_dir/en/"
+    else
+      echo "Error: Could not find TSV file to copy to target location"
+      # Instead of exiting, create an empty TSV file with the correct header
+      echo -e "client_id\tpath\tsentence_id\tsentence\tsentence_domain\tup_votes\tdown_votes\tage\tgender\taccents\tvariant\tlocale\tsegment" > "$merge_into_dir/en/custom_validated.tsv"
+      echo "Created empty custom_validated.tsv with header in $merge_into_dir/en/"
+    fi
+    
+    echo "Data successfully initialized in $merge_into_dir"
+  fi
+  
+  echo "Skipping local dataset processing since we're in merge mode."
+  # Skip the rest of the script when merging
+  exit 0
 fi
 
 # Print statistics about the filtered dataset
