@@ -91,6 +91,36 @@ echo "People Speech preparation completed."
 echo "Installing additional required packages..."
 pip install pandas pyarrow pydub soundfile
 
+# Check and install ffmpeg if not already installed
+if ! command -v ffmpeg &> /dev/null; then
+  echo "ffmpeg not found. Installing ffmpeg..."
+  
+  # Detect OS and install ffmpeg accordingly
+  if [ -f /etc/debian_version ]; then
+    # Debian/Ubuntu
+    apt-get update && apt-get install -y ffmpeg
+  elif [ -f /etc/redhat-release ]; then
+    # CentOS/RHEL
+    yum install -y ffmpeg
+  elif [ -f /etc/arch-release ]; then
+    # Arch Linux
+    pacman -S --noconfirm ffmpeg
+  elif [ -f /etc/alpine-release ]; then
+    # Alpine
+    apk add --no-cache ffmpeg
+  elif command -v brew &> /dev/null; then
+    # macOS with Homebrew
+    brew install ffmpeg
+  else
+    echo "Warning: Could not automatically install ffmpeg. Please install it manually."
+    echo "You can try: sudo apt-get install ffmpeg (for Debian/Ubuntu)"
+    echo "or: sudo yum install ffmpeg (for CentOS/RHEL)"
+    exit 1
+  fi
+else
+  echo "ffmpeg is already installed."
+fi
+
 # Run the conversion script
 echo "Converting parquet files to MP3 and transcripts (keeping only sentences with 8-25 words)..."
 python convert_parquets_files_into_mp3_and_transcripts.py
