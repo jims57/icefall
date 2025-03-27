@@ -87,6 +87,11 @@ if [ ! -f "download_l2_arctic_ds_from_official_site.py" ]; then
   exit 1
 fi
 
+# Install required Python packages
+echo "Checking and installing required Python packages..."
+python -m pip install --upgrade pip
+python -m pip install requests tqdm librosa
+
 # Check if the output directory already exists
 if [ -d "$output_dir" ]; then
   echo "Output directory $output_dir already exists."
