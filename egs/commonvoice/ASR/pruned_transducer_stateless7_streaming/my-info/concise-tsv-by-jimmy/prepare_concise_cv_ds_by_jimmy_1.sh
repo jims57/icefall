@@ -20,6 +20,16 @@ set -o pipefail  # Exit if any command in a pipe fails
 
 echo "Starting preparation of concise CommonVoice dataset..."
 
+# Check if jq is installed, if not, install it
+if ! command -v jq &> /dev/null; then
+  echo "jq not found. Installing jq..."
+  wget -O jq https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64
+  chmod +x ./jq
+  # Use local jq if we can't install to /usr/bin
+  export PATH=$PWD:$PATH
+  echo "jq installed successfully in the current directory."
+fi
+
 # Default parameters
 CUSTOM_VALIDATED_TSV="custom_validated.tsv"
 CLIPS_DIR="./clips"
