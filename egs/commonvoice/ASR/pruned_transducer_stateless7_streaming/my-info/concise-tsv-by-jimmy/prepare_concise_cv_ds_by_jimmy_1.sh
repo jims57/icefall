@@ -143,6 +143,12 @@ if [ -f "train.tsv" ] && [ -f "dev.tsv" ] && [ -f "test.tsv" ]; then
   # Display row counts for verification
   echo "File statistics:"
   wc -l train.tsv dev.tsv test.tsv
+  
+  # Move TSV files to the en folder
+  echo "Moving TSV files to en folder..."
+  mkdir -p "en"
+  mv train.tsv dev.tsv test.tsv "en/"
+  echo "TSV files moved to en folder."
 else
   echo "Error: Failed to create all required TSV files."
   exit 1
