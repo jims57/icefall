@@ -3,11 +3,20 @@
 
 import csv
 import os
+import argparse
 from pathlib import Path
 
-# Define paths
-tsv_file = "custom_validated.tsv"
-clips_dir = "clips"
+# Parse command line arguments
+parser = argparse.ArgumentParser(description="Fix dataset mismatch between TSV and clips directory")
+parser.add_argument("--custom-validated-tsv", default="./en/custom_validated.tsv", 
+                    help="Path to custom_validated.tsv file (default: ./en/custom_validated.tsv)")
+parser.add_argument("--clips-dir", default="./en/clips", 
+                    help="Path to clips directory (default: ./en/clips)")
+args = parser.parse_args()
+
+# Define paths from arguments
+tsv_file = args.custom_validated_tsv
+clips_dir = args.clips_dir
 
 print(f"Starting dataset consistency check...")
 print(f"TSV file: {tsv_file}")

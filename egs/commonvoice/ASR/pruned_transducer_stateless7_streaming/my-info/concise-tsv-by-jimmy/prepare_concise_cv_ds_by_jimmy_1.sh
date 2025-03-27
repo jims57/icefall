@@ -38,8 +38,8 @@ if ! command -v jq &> /dev/null; then
 fi
 
 # Default parameters
-CUSTOM_VALIDATED_TSV="custom_validated.tsv"
-CLIPS_DIR="./clips"
+CUSTOM_VALIDATED_TSV="en/custom_validated.tsv"
+CLIPS_DIR="./en/clips"
 DEV_RATIO=0.1
 TEST_RATIO=0.1
 SEED=42
@@ -82,7 +82,7 @@ done
 # Step 1: Fix dataset mismatch
 echo "Step 1: Fixing dataset mismatch..."
 if [ -f "fix_dataset_mismatch.py" ]; then
-  python3 fix_dataset_mismatch.py
+  python3 fix_dataset_mismatch.py --custom-validated-tsv "${CUSTOM_VALIDATED_TSV}" --clips-dir "${CLIPS_DIR}"
   echo "Dataset mismatch fix completed."
 else
   echo "Error: fix_dataset_mismatch.py not found."
@@ -92,7 +92,7 @@ fi
 # Step 2: Check consistency
 echo "Step 2: Checking dataset consistency..."
 if [ -f "check_consistency.sh" ]; then
-  bash check_consistency.sh
+  bash check_consistency.sh --custom-validated-tsv "${CUSTOM_VALIDATED_TSV}" --clips-dir "${CLIPS_DIR}"
   
   # Check if the consistency check was successful
   if [ $? -ne 0 ]; then
