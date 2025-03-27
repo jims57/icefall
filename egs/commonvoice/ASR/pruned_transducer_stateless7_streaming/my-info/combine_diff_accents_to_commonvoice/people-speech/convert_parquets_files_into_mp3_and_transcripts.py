@@ -28,8 +28,8 @@ def format_sentence(sentence):
         return ""
     return sentence.strip().capitalize()
 
-# Function to check if sentence has valid length (more than 7 and less than 26 words)
-def is_valid_sentence_length(sentence, min_words=8, max_words=25):
+# Function to check if sentence has valid length (more than 1 and less than 41 words)
+def is_valid_sentence_length(sentence, min_words=1, max_words=40):
     if not sentence:
         return False
     words = sentence.strip().split()
@@ -59,10 +59,10 @@ def process_row(row_data, clips_dir, parquet_file):
             print(f"Skipping row {idx} in {parquet_file}: Missing audio data or transcript")
             return None
             
-        # Check if the sentence has valid length (more than 7 and less than 26 words)
-        if not is_valid_sentence_length(transcript, min_words=8, max_words=25):
+        # Check if the sentence has valid length (more than 1 and less than 41 words)
+        if not is_valid_sentence_length(transcript, min_words=1, max_words=40):
             word_count = len(transcript.strip().split())
-            print(f"Skipping row {idx} in {parquet_file}: Sentence has {word_count} words (outside the 8-25 range)")
+            print(f"Skipping row {idx} in {parquet_file}: Sentence has {word_count} words (outside the 1-40 range)")
             return None
         
         # Generate a unique filename for the mp3
