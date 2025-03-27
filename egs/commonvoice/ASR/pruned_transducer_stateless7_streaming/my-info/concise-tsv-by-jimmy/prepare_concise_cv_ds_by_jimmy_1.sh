@@ -138,6 +138,22 @@ if [ "${COUNT_TOTAL_HOURS}" = "true" ]; then
   echo "Step 4: Calculating total audio duration..."
   DURATION_SCRIPT="calculate_audio_duration.py"
   
+  # Check if ffmpeg is installed
+  if ! command -v ffmpeg &> /dev/null || ! command -v ffprobe &> /dev/null; then
+    echo "FFmpeg/ffprobe is required but not installed. Installing now..."
+    # Try to install ffmpeg based on the system
+    if command -v apt-get &> /dev/null; then
+      sudo apt-get update && sudo apt-get install -y ffmpeg
+    elif command -v yum &> /dev/null; then
+      sudo yum install -y ffmpeg
+    elif command -v brew &> /dev/null; then
+      brew install ffmpeg
+    else
+      echo "Error: Could not install FFmpeg automatically. Please install FFmpeg manually and try again."
+      exit 1
+    fi
+  fi
+  
   # Create the duration calculation script
   cat > "${DURATION_SCRIPT}" << 'EOF'
 #!/usr/bin/env python3
