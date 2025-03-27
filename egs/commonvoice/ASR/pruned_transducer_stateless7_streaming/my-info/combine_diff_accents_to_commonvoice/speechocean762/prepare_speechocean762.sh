@@ -79,6 +79,25 @@ if ! command -v ffmpeg &> /dev/null; then
     conda install -y -c conda-forge ffmpeg
 fi
 
+# Check if Python is available
+if ! command -v python &> /dev/null; then
+    echo "Error: Python is not installed or not in PATH"
+    exit 1
+fi
+
+# Check if pydub is installed, and install if needed
+python -c "import pydub" &> /dev/null
+if [ $? -ne 0 ]; then
+    echo "pydub not found. Installing..."
+    pip install pydub
+fi
+
+# Check if the convert script exists
+if [ ! -f "convert_speechocean762_to_cv_ds_format.py" ]; then
+    echo "Error: convert_speechocean762_to_cv_ds_format.py script not found"
+    exit 1
+fi
+
 # Determine the number of CPU cores for parallel processing
 num_cores=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 echo "Detected $num_cores CPU cores. Will use parallel processing."
@@ -110,18 +129,6 @@ fi
 # Check if the required directories exist
 if [ ! -d "WAVE" ]; then
     echo "WAVE directory not found. Attempting to download SpeechOcean762 dataset..."
-    
-    # Check if Python is available
-    if ! command -v python &> /dev/null; then
-        echo "Error: Python is not installed or not in PATH"
-        exit 1
-    fi
-    
-    # Check if the convert script exists
-    if [ ! -f "convert_speechocean762_to_cv_ds_format.py" ]; then
-        echo "Error: convert_speechocean762_to_cv_ds_format.py script not found"
-        exit 1
-    fi
     
     # Download the dataset using the Python script
     python convert_speechocean762_to_cv_ds_format.py --download
