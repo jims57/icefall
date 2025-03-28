@@ -92,6 +92,12 @@ echo "Checking and installing required Python packages..."
 python -m pip install --upgrade pip
 python -m pip install requests tqdm librosa
 
+# Check if ffmpeg is installed, install if not
+if ! command -v ffmpeg &> /dev/null; then
+  echo "ffmpeg not found. Installing ffmpeg..."
+  apt-get update && apt-get install -y ffmpeg
+fi
+
 # Check if the output directory already exists
 if [ -d "$output_dir" ]; then
   echo "Output directory $output_dir already exists."
