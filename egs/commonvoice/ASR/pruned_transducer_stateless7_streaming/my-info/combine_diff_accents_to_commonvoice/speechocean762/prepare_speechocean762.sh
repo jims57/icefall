@@ -139,6 +139,16 @@ if [ ! -d "WAVE" ]; then
         exit 1
     else
         echo "Successfully downloaded SpeechOcean762 dataset"
+        
+        # Delete the tarball after successful extraction
+        if [ -f "speechocean762-v1.2.0.tar.gz" ]; then
+            echo "Removing speechocean762-v1.2.0.tar.gz to save disk space..."
+            rm speechocean762-v1.2.0.tar.gz
+            
+            # Empty the trash to fully reclaim disk space
+            rm -rf ~/.local/share/Trash/*
+            echo "Emptied trash to fully reclaim disk space"
+        fi
     fi
 fi
 
