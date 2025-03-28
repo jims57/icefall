@@ -14,11 +14,47 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# =====================================================================
+# This script prepares a concise CommonVoice dataset for ASR training.
+# It performs the following steps:
+# 1. Fixes dataset mismatches between TSV and audio files
+# 2. Checks dataset consistency
+# 3. Creates train/dev/test splits
+# 4. Optionally calculates total audio duration
+# =====================================================================
+
 set -e  # Exit on error
 set -u  # Error on undefined variables
 set -o pipefail  # Exit if any command in a pipe fails
 
-echo "Starting preparation of concise CommonVoice dataset..."
+echo "=========================================================="
+echo "  CommonVoice Dataset Preparation Tool"
+echo "  This tool prepares a concise CommonVoice dataset for ASR"
+echo "=========================================================="
+
+# Display usage information
+function show_usage {
+  echo ""
+  echo "Usage: $0 [options]"
+  echo ""
+  echo "Options:"
+  echo "  --custom-validated-tsv PATH   Path to custom validated TSV file (default: en/custom_validated.tsv)"
+  echo "  --clips-dir PATH              Path to directory containing audio clips (default: ./en/clips)"
+  echo "  --dev-ratio VALUE             Ratio of data for development set (default: 0.1)"
+  echo "  --test-ratio VALUE            Ratio of data for test set (default: 0.1)"
+  echo "  --seed VALUE                  Random seed for reproducibility (default: 42)"
+  echo "  --count-total-hours true|false  Whether to calculate total audio duration (default: true)"
+  echo ""
+  echo "Example:"
+  echo "  $0 --custom-validated-tsv path/to/validated.tsv --clips-dir path/to/clips --dev-ratio 0.15"
+  echo ""
+}
+
+# Show usage if --help is provided
+if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+  show_usage
+  exit 0
+fi
 
 # Check if jq is installed, if not, install it using conda
 if ! command -v jq &> /dev/null; then
@@ -74,10 +110,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Unknown option: $1"
+      echo "Use --help to see available options"
       exit 1
       ;;
   esac
 done
+
+# Display configuration
+echo ""
+echo "Configuration:"
+echo "  Custom validated TSV: ${CUSTOM_VALIDATED_TSV}"
+echo "  Clips directory: ${CLIPS_DIR}"
+echo "  Dev set ratio: ${DEV_RATIO}"
+echo "  Test set ratio: ${TEST_RATIO}"
+echo "  Random seed: ${SEED}"
+echo "  Count total hours: ${COUNT_TOTAL_HOURS}"
+echo ""
 
 # Step 1: Fix dataset mismatch
 echo "Step 1: Fixing dataset mismatch..."
@@ -86,6 +134,8 @@ if [ -f "fix_dataset_mismatch.py" ]; then
   echo "Dataset mismatch fix completed."
 else
   echo "Error: fix_dataset_mismatch.py not found."
+  echo "This script should be in the same directory and is required to ensure"
+  echo "all audio files referenced in the TSV exist on disk."
   exit 1
 fi
 
@@ -97,11 +147,17 @@ if [ -f "check_consistency.sh" ]; then
   # Check if the consistency check was successful
   if [ $? -ne 0 ]; then
     echo "Error: Dataset consistency check failed. Please fix the inconsistencies before proceeding."
+    echo "Common issues include:"
+    echo "  - Missing audio files"
+    echo "  - Corrupted audio files"
+    echo "  - Mismatched file paths in TSV"
     exit 1
   fi
   echo "Dataset consistency check passed."
 else
   echo "Error: check_consistency.sh not found."
+  echo "This script should be in the same directory and is required to verify"
+  echo "the integrity of the dataset before proceeding."
   exit 1
 fi
 
@@ -122,6 +178,7 @@ elif [ -f "python/${PYTHON_SCRIPT}" ]; then
   echo "Found Python script in python directory."
 else
   echo "Error: Cannot find ${PYTHON_SCRIPT} in current directory or python subdirectory."
+  echo "This script is required to split the dataset into train, dev, and test sets."
   exit 1
 fi
 
@@ -151,6 +208,7 @@ if [ -f "train.tsv" ] && [ -f "dev.tsv" ] && [ -f "test.tsv" ]; then
   echo "TSV files moved to en folder."
 else
   echo "Error: Failed to create all required TSV files."
+  echo "Check the output above for any error messages from the Python script."
   exit 1
 fi
 
@@ -175,6 +233,7 @@ if [ "${COUNT_TOTAL_HOURS}" = "true" ]; then
       brew install ffmpeg
     else
       echo "Error: Could not install FFmpeg automatically. Please install FFmpeg manually and try again."
+      echo "Visit https://ffmpeg.org/download.html for installation instructions."
       exit 1
     fi
   fi
@@ -235,18 +294,32 @@ EOF
   chmod +x "${DURATION_SCRIPT}"
 
   # Install required packages if not already installed
+  echo "Installing required Python packages (pydub, pandas)..."
   pip install pydub pandas
 
   # Run the duration calculation script
   echo "Calculating total audio duration (this may take a while)..."
-  python3 "${DURATION_SCRIPT}" --tsv-files train.tsv dev.tsv test.tsv --clips-dir "${CLIPS_DIR}"
+  python3 "${DURATION_SCRIPT}" --tsv-files en/train.tsv en/dev.tsv en/test.tsv --clips-dir "${CLIPS_DIR}"
 else
   echo "Skipping audio duration calculation (--count-total-hours is set to false)"
 fi
 
+echo ""
+echo "=========================================================="
 echo "All processing complete!"
 echo ""
-echo "IMPORTANT: Make sure jq is available when running prepare.sh"
-echo "If you encounter 'jq: command not found' when running prepare.sh, run:"
-echo "  conda install -y -c conda-forge jq"
+echo "IMPORTANT NOTES:"
+echo "1. Make sure jq is available when running prepare.sh"
+echo "   If you encounter 'jq: command not found' when running prepare.sh, run:"
+echo "   conda install -y -c conda-forge jq"
 echo ""
+echo "2. The prepared dataset is now ready in the 'en' directory:"
+echo "   - en/train.tsv: Training data"
+echo "   - en/dev.tsv: Development/validation data"
+echo "   - en/test.tsv: Test data"
+echo ""
+echo "3. Next steps:"
+echo "   - Run the ASR training script with this prepared dataset"
+echo "   - Monitor training progress with TensorBoard"
+echo "   - Evaluate model performance on the test set"
+echo "=========================================================="
