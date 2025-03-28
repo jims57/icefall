@@ -74,7 +74,7 @@ if ! command -v jq &> /dev/null; then
 fi
 
 # Default parameters
-CUSTOM_VALIDATED_TSV="en/custom_validated.tsv"
+CUSTOM_VALIDATED_TSV="./en/custom_validated.tsv"
 CLIPS_DIR="./en/clips"
 DEV_RATIO=0.1
 TEST_RATIO=0.1
