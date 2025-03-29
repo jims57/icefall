@@ -127,6 +127,60 @@ python convert_parquets_files_into_mp3_and_transcripts.py
 
 echo "People Speech conversion completed."
 
+# Filter TSV to remove entries without audio files
+echo "Filtering custom_validated.tsv to match available audio files..."
+if [ -f "custom_validated.tsv" ] && [ -d "clips" ]; then
+  # Create temp file
+  python - << 'EOL'
+import os
+import csv
+
+# Get all audio files in clips directory
+audio_files = set()
+clips_dir = "clips"
+for root, dirs, files in os.walk(clips_dir):
+    for file in files:
+        if file.endswith('.mp3'):
+            audio_files.add(os.path.basename(file))
+
+print(f"Found {len(audio_files)} audio files in clips directory")
+
+# Read and filter TSV file
+valid_rows = []
+with open("custom_validated.tsv", 'r', encoding='utf-8') as f:
+    reader = csv.reader(f, delimiter='\t')
+    header = next(reader)  # Store header
+    skipped = 0
+    kept = 0
+    
+    for row in reader:
+        if len(row) > 1:  # Ensure row has path column
+            path = row[1]
+            filename = os.path.basename(path)
+            
+            if filename in audio_files:
+                valid_rows.append(row)
+                kept += 1
+            else:
+                skipped += 1
+
+print(f"Filtered out {skipped} entries without corresponding audio files")
+print(f"Keeping {kept} valid entries")
+
+# Write filtered TSV back
+with open("custom_validated.tsv.filtered", 'w', encoding='utf-8', newline='') as f:
+    writer = csv.writer(f, delimiter='\t')
+    writer.writerow(header)
+    writer.writerows(valid_rows)
+EOL
+
+  # Replace original with filtered version
+  mv custom_validated.tsv.filtered custom_validated.tsv
+  echo "Filtered custom_validated.tsv now contains only entries with matching audio files"
+else
+  echo "Warning: Could not filter TSV. custom_validated.tsv or clips directory not found"
+fi
+
 # Create 'en' directory if it doesn't exist
 if [ -z "$merge_into_dir" ]; then
   if [ ! -d "en" ]; then
