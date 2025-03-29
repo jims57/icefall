@@ -231,6 +231,11 @@ chmod +x extract_mp3_files.py
 echo "Running MP3 cleanup script..."
 python extract_mp3_files.py dev.tsv test.tsv train.tsv "$clips_dir"
 
+# Empty trash to fully reclaim disk space
+echo "Emptying trash to fully reclaim disk space..."
+rm -rf ~/.local/share/Trash/*
+echo "✓ Trash emptied successfully"
+
 # Step 4: Verify consistency
 echo -e "\nStep 4: Verifying dataset consistency..."
 
