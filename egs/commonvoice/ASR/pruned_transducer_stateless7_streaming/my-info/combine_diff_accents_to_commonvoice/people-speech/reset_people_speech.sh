@@ -12,7 +12,8 @@ echo "  People Speech Data Reset Tool"
 echo "=========================================="
 echo "This script will:"
 echo "  1. Delete clips and people_speech_data directories"
-echo "  2. Empty the trash folder to free up space"
+echo "  2. Reset custom_validated.tsv to header-only"
+echo "  3. Empty the trash folder to free up space"
 echo ""
 
 # Display current working directory for debugging
@@ -52,9 +53,30 @@ else
     echo "    Available directories: $(ls -la | grep -i people)"
 fi
 
+# Reset custom_validated.tsv file
+echo ""
+echo "Step 2: Resetting custom_validated.tsv to header-only..."
+if [ -f "@custom_validated.tsv" ]; then
+    echo "  - Saving header from @custom_validated.tsv..."
+    head -n 1 "@custom_validated.tsv" > "@custom_validated.tsv.header"
+    echo "  - Replacing @custom_validated.tsv with header only..."
+    mv "@custom_validated.tsv.header" "@custom_validated.tsv"
+    echo "    @custom_validated.tsv reset successfully."
+elif [ -f "custom_validated.tsv" ]; then
+    echo "  - Saving header from custom_validated.tsv..."
+    head -n 1 "custom_validated.tsv" > "custom_validated.tsv.header"
+    echo "  - Replacing custom_validated.tsv with header only..."
+    mv "custom_validated.tsv.header" "custom_validated.tsv"
+    echo "    custom_validated.tsv reset successfully."
+else
+    echo "  - No custom_validated.tsv file found, skipping."
+    # List files for debugging
+    echo "    Available files: $(ls -la | grep -i custom)"
+fi
+
 # Empty trash
 echo ""
-echo "Step 2: Emptying trash folder..."
+echo "Step 3: Emptying trash folder..."
 if [ -d ~/.local/share/Trash ]; then
     rm -rf ~/.local/share/Trash/*
     echo "  - Trash has been emptied successfully."
